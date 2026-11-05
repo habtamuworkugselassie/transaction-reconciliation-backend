@@ -200,9 +200,13 @@ services:
     environment:
       DOMAIN: ${DOMAIN:?set DOMAIN in .env}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    # Host ports. 80 and 443 are taken on the droplet by another service, so the defaults
+    # are 9001 (HTTP) and 9443 (HTTPS); Caddy itself still listens on 80/443 inside the
+    # container. A hostname DOMAIN with a Let's Encrypt certificate needs the real 80/443
+    # (the ACME challenge comes in on 80): set HTTP_PORT=80 and HTTPS_PORT=443 in deploy/.env.
     ports:
-      - "80:80"
-      - "443:443"
+      - "${HTTP_PORT:-9001}:80"
+      - "${HTTPS_PORT:-9443}:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

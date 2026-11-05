@@ -22,7 +22,9 @@
 	reverse_proxy api:8080 {
 		header_up X-Forwarded-Proto {scheme}
 		header_up X-Forwarded-For {remote_host}
-		header_up Host {host}
+		# {hostport}, not {host}: keep the public port (e.g. :9001), so URLs the API builds
+		# from the request (Swagger's "Try it out", OpenAPI servers) point back through Caddy.
+		header_up Host {hostport}
 		# A 200 MB upload on a slow link takes a while; keep the backend stream open.
 		transport http {
 			read_timeout 10m

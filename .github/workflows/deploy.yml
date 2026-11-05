@@ -136,7 +136,7 @@ jobs:
             # becomes healthy) would exit right here, with no logs and no rollback; route it
             # through the same path as a failed health gate instead.
             if ! $COMPOSE up -d api worker caddy; then
-              fail_and_roll_back "Starting the stack failed (a dependency did not become healthy)"
+              fail_and_roll_back "Starting the stack failed (a dependency did not become healthy, or a port is taken; see above)"
             fi
 
             # The Caddyfile is bind-mounted, and compose does not recreate a container when a
@@ -169,3 +169,15 @@ jobs:
             # Remove the rollback tag of this deploy and dangling layers; keep the running image.
             docker rmi "$DEPLOY_IMAGE:rollback-$SHA" >/dev/null 2>&1 || true
             docker image prune -f
+
+      # The gate above runs on the droplet. This one runs from GitHub's network, so it fails
+      # if the API is not reachable from the internet (firewall, wrong port, Caddy down).
+      - name: Check the API is publicly reachable
+        env:
+          # Actions variable PUBLIC_URL overrides it, e.g. https://api.example.com
+          PUBLIC_URL: ${{ vars.PUBLIC_URL || format('http://{0}:9001', secrets.DO_HOST) }}
+        run: |
+          curl -fsS --max-time 10 --retry 12 --retry-delay 5 --retry-all-errors \
+            "$PUBLIC_URL/health/ready" -o /dev/null
+          curl -fsS --max-time 10 "$PUBLIC_URL/swagger-ui/index.html" -o /dev/null
+          echo "Reachable: $PUBLIC_URL (health and Swagger UI)"

@@ -28,7 +28,24 @@ looks for it in a registry.
 | `DOMAIN` | Result |
 |---|---|
 | `api.example.com` | HTTPS with a Let's Encrypt certificate; http redirects to https. The name needs an A record pointing at the droplet **before the first start**, or the certificate request fails and clients get a TLS error. Check with `dig +short api.example.com`. |
-| `http://165.245.247.93` | plain HTTP on port 80, no certificate. Use this when there is no DNS name: a bare IP gets no Let's Encrypt certificate here, and without the `http://` prefix every request fails the TLS handshake. |
+| `http://165.245.247.93` | plain HTTP, no certificate. Use this when there is no DNS name: a bare IP gets no Let's Encrypt certificate here, and without the `http://` prefix every request fails the TLS handshake. |
+
+**Ports.** Caddy is published on host ports `HTTP_PORT` (default **9001**) and `HTTPS_PORT`
+(default 9443), because 80 and 443 on this droplet belong to another service. The
+deployment is therefore at **http://165.245.247.93:9001**. A hostname `DOMAIN` with a Let's
+Encrypt certificate needs the standard ports (the certificate challenge arrives on 80): set
+`HTTP_PORT=80` and `HTTPS_PORT=443` in `deploy/.env`, if they are free.
+
+Open the port in the firewall, once, as root:
+
+```bash
+ufw allow 9001/tcp
+ufw status | grep 9001
+```
+
+If the droplet also has a DigitalOcean Cloud Firewall (Networking → Firewalls), add an
+inbound TCP 9001 rule there too; `ufw` alone is not enough in that case. Every deploy
+ends by fetching `/health/ready` from GitHub's network, so a closed port turns the run red.
 
 To change it later, edit `deploy/.env` and recreate Caddy so it picks up the new value:
 `docker compose -f deploy/docker-compose.prod.yml up -d --force-recreate caddy`.
@@ -78,10 +95,10 @@ docker compose -f deploy/docker-compose.prod.yml up -d
 
 ## 4. Verify
 
-`BASE` is `https://<hostname>` or `http://<ip>`, matching `DOMAIN`:
+`BASE` is `https://<hostname>` or `http://<ip>:<HTTP_PORT>`, matching `DOMAIN` and the ports:
 
 ```bash
-BASE=http://165.245.247.93
+BASE=http://165.245.247.93:9001
 curl -sI $BASE/swagger-ui/index.html | head -1   # 200
 curl -s  $BASE/health/ready                        # {"status":"UP",...}
 curl -s  $BASE/metrics | head                      # Prometheus text
