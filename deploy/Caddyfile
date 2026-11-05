@@ -1,0 +1,38 @@
+# TLS termination for the reconciliation API.
+#
+# Caddy obtains and renews the Let's Encrypt certificate automatically; the name in
+# DOMAIN must already resolve to this droplet before the first start, or the ACME
+# challenge fails. http -> https redirection is Caddy's default.
+
+{
+	# Certificate expiry and renewal failures arrive here.
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy api:8080 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-For {remote_host}
+		header_up Host {host}
+		# A 200 MB upload on a slow link takes a while; keep the backend stream open.
+		transport http {
+			read_timeout 10m
+			write_timeout 10m
+		}
+	}
+
+	# Mirrors app.upload.max-file-size-bytes plus multipart overhead; Caddy rejects
+	# larger bodies before they reach the JVM.
+	request_body {
+		max_size 210MB
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 20MB
+			roll_keep 5
+		}
+	}
+}
