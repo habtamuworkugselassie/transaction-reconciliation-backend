@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- Human-readable logs by default; JSON (one object per line) when the "json"
+         Spring profile is active, which docker-compose sets. MDC carries
+         requestId / importId / workerId / batch / attempt so every line is correlatable. -->
+
+    <appender name="TEXT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} %X{requestId:-} %X{importId:-} %X{workerId:-} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>requestId</includeMdcKeyName>
+            <includeMdcKeyName>importId</includeMdcKeyName>
+            <includeMdcKeyName>jobId</includeMdcKeyName>
+            <includeMdcKeyName>workerId</includeMdcKeyName>
+            <includeMdcKeyName>batch</includeMdcKeyName>
+            <includeMdcKeyName>attempt</includeMdcKeyName>
+            <includeMdcKeyName>errorCode</includeMdcKeyName>
+            <includeMdcKeyName>shutdown</includeMdcKeyName>
+            <shortenedLoggerNameLength>36</shortenedLoggerNameLength>
+            <!-- Stack traces are shortened; request payloads are never logged. -->
+            <throwableConverter class="net.logstash.logback.stacktrace.ShortenedThrowableConverter">
+                <maxDepthPerThrowable>20</maxDepthPerThrowable>
+                <rootCauseFirst>true</rootCauseFirst>
+            </throwableConverter>
+        </encoder>
+    </appender>
+
+    <springProfile name="json">
+        <root level="INFO"><appender-ref ref="JSON"/></root>
+    </springProfile>
+    <springProfile name="!json">
+        <root level="INFO"><appender-ref ref="TEXT"/></root>
+    </springProfile>
+</configuration>
