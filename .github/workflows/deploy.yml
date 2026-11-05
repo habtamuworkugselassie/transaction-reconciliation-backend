@@ -108,12 +108,36 @@ jobs:
             docker pull "$REGISTRY_IMAGE:$SHA"
             docker tag "$REGISTRY_IMAGE:$SHA" "$DEPLOY_IMAGE:latest"
 
-            # api and worker run the same image; depends_on starts postgres, redis and kafka
-            # (healthy) first. caddy is included so a first deploy starts it, and so a changed
-            # DOMAIN in deploy/.env recreates it. Flyway migrates when the api starts.
-            # A restarted worker shuts down gracefully: in-flight batches commit, its import is
-            # released, and the new worker resumes from the checkpoint.
-            $COMPOSE up -d api worker caddy
+            # One exit path for every failure after the new image is tagged: show what is
+            # wrong (including the infrastructure services, which a failed dependency is),
+            # put the previous image back, and fail the job so the deploy goes red.
+            fail_and_roll_back() {
+              echo "::error::$1; rolling back."
+              $COMPOSE ps -a || true
+              for svc in data-dirs kafka postgres redis api worker; do
+                echo "----- $svc (last 40 lines) -----"
+                $COMPOSE logs --no-color --tail 40 "$svc" 2>/dev/null || true
+              done
+              docker tag "$DEPLOY_IMAGE:rollback-$SHA" "$DEPLOY_IMAGE:latest" 2>/dev/null \
+                && $COMPOSE up -d api worker \
+                && echo "Rolled back to the previous image." \
+                || echo "::warning::No previous image to roll back to (or it could not start either)."
+              exit 1
+            }
+
+            # api and worker run the same image. depends_on first runs data-dirs (creates the
+            # bind-mount directories owned by uid 1000, which Kafka and the app run as), then
+            # waits for postgres, redis and kafka to be healthy. caddy is included so a first
+            # deploy starts it, and so a changed DOMAIN in deploy/.env recreates it. Flyway
+            # migrates when the api starts. A restarted worker shuts down gracefully: in-flight
+            # batches commit, its import is released, and the new worker resumes from the
+            # checkpoint.
+            # Under `set -e` a failed `up` (e.g. "dependency failed to start" when Kafka never
+            # becomes healthy) would exit right here, with no logs and no rollback; route it
+            # through the same path as a failed health gate instead.
+            if ! $COMPOSE up -d api worker caddy; then
+              fail_and_roll_back "Starting the stack failed (a dependency did not become healthy)"
+            fi
 
             # The Caddyfile is bind-mounted, and compose does not recreate a container when a
             # mounted file's content changes. Graceful reload: zero downtime, no-op if unchanged.
@@ -130,7 +154,7 @@ jobs:
             }
             echo "Waiting for api and worker to become ready..."
             healthy=false
-            for i in $(seq 1 36); do
+            for _ in $(seq 1 36); do
               if ready api 8080 && ready worker 8081; then
                 healthy=true; break
               fi
@@ -138,13 +162,7 @@ jobs:
             done
 
             if [ "$healthy" != "true" ]; then
-              echo "::error::api/worker did not become ready within 180s; rolling back."
-              $COMPOSE logs --tail 60 api worker || true
-              docker tag "$DEPLOY_IMAGE:rollback-$SHA" "$DEPLOY_IMAGE:latest" 2>/dev/null \
-                && $COMPOSE up -d api worker \
-                && echo "Rolled back to the previous image." \
-                || echo "::warning::No previous image to roll back to."
-              exit 1
+              fail_and_roll_back "api/worker did not become ready within 180s"
             fi
             echo "api and worker are ready."
 
