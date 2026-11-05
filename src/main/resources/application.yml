@@ -1,0 +1,164 @@
+spring:
+  application:
+    name: transaction-reconciliation-service
+  main:
+    banner-mode: off
+  threads:
+    virtual:
+      # Virtual threads for request handling: cheap blocking I/O, no event-loop to starve.
+      # CPU-bound scoring is deliberately NOT on virtual threads (see RiskScoringConfig).
+      enabled: true
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/reconciliation}
+    username: ${DATABASE_USERNAME:postgres}
+    password: ${DATABASE_PASSWORD:postgres}
+    hikari:
+      # Bounded: workers x in-flight batches + API headroom. Raising this does not
+      # raise throughput once Postgres is the bottleneck; it only hides contention.
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      minimum-idle: 2
+      connection-timeout: 5000
+      validation-timeout: 2000
+      max-lifetime: 1800000
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  jooq:
+    sql-dialect: postgres
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      # Durable publish: the broker acknowledges only after the write is replicated.
+      acks: all
+      properties:
+        enable.idempotence: true
+        delivery.timeout.ms: 10000
+        request.timeout.ms: 5000
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP:import-workers}
+      enable-auto-commit: false
+      auto-offset-reset: earliest
+    admin:
+      fail-fast: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2s
+      connect-timeout: 2s
+  servlet:
+    multipart:
+      # Disabled on purpose: MultipartUploadStreamer reads parts as a stream so the
+      # body is written exactly once (to storage) and never buffered by the container.
+      enabled: false
+  lifecycle:
+    timeout-per-shutdown-phase: ${SHUTDOWN_GRACE_PERIOD:30s}
+
+server:
+  port: ${PORT:8080}
+  shutdown: graceful
+  tomcat:
+    mbeanregistry:
+      enabled: true   # tomcat.threads.* metrics
+    threads:
+      max: 200
+    max-swallow-size: 1MB
+    connection-timeout: 20s
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-exception: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+      probes:
+        enabled: true
+      group:
+        # Served at /health/live and /health/ready by HealthController.
+        liveness:
+          include: livenessState
+        # Redis is deliberately absent: the caches fail soft, so a Redis outage must
+        # not take the API out of rotation. It is still reported on /actuator/health.
+        readiness:
+          include: readinessState,db,storage,worker,kafka
+  health:
+    db:
+      enabled: true
+    diskspace:
+      enabled: false   # replaced by the storage indicator, which checks the upload root
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        import.batch.duration: true
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: alpha
+
+app:
+  upload:
+    max-file-size-bytes: ${UPLOAD_MAX_FILE_SIZE_BYTES:209715200}
+    max-concurrent-uploads: ${UPLOAD_MAX_CONCURRENT:4}
+    provider-header: X-Provider-Id
+    default-provider: default
+  storage:
+    root: ${STORAGE_ROOT:./data/uploads}
+  processing:
+    enabled: ${PROCESSING_ENABLED:true}
+    max-concurrent-imports: ${PROCESSING_MAX_CONCURRENT_IMPORTS:2}
+    batch-size: ${PROCESSING_BATCH_SIZE:1000}
+    max-in-flight-batches: ${PROCESSING_MAX_IN_FLIGHT_BATCHES:2}
+    max-line-length: ${PROCESSING_MAX_LINE_LENGTH:16384}
+    max-raw-value-length: 512
+    poll-interval: ${PROCESSING_POLL_INTERVAL:1s}
+    lease-duration: ${PROCESSING_LEASE_DURATION:30s}
+    heartbeat-interval: ${PROCESSING_HEARTBEAT_INTERVAL:10s}
+    stale-upload-timeout: ${UPLOAD_STALE_TIMEOUT:15m}
+    max-attempts: ${PROCESSING_MAX_ATTEMPTS:3}
+    redispatch-interval: ${PROCESSING_REDISPATCH_INTERVAL:60s}
+  risk:
+    worker-threads: ${RISK_WORKER_THREADS:0}
+    queue-capacity: ${RISK_QUEUE_CAPACITY:4000}
+    hash-iterations: ${RISK_HASH_ITERATIONS:200}
+  retry:
+    max-attempts: ${RETRY_MAX_ATTEMPTS:5}
+    initial-backoff: ${RETRY_INITIAL_BACKOFF:200ms}
+    max-backoff: ${RETRY_MAX_BACKOFF:5s}
+    multiplier: 2
+    jitter: 0.25
+  shutdown:
+    grace-period: ${SHUTDOWN_GRACE_PERIOD:30s}
+  kafka:
+    topic: ${KAFKA_IMPORTS_TOPIC:imports.requested}
+    partitions: ${KAFKA_IMPORTS_PARTITIONS:8}
+    consumer-group: ${KAFKA_CONSUMER_GROUP:import-workers}
+    publish-timeout: ${KAFKA_PUBLISH_TIMEOUT:5s}
+    redelivery-delay: ${KAFKA_REDELIVERY_DELAY:10s}
+    max-processing-time: ${KAFKA_MAX_PROCESSING_TIME:1h}
+  cache:
+    summary-live-ttl: ${CACHE_SUMMARY_LIVE_TTL:2s}
+    summary-final-ttl: ${CACHE_SUMMARY_FINAL_TTL:1h}
+    idempotency-ttl: ${CACHE_IDEMPOTENCY_TTL:24h}
+
+logging:
+  level:
+    root: INFO
+    com.reconciliation: ${LOG_LEVEL:INFO}
