@@ -1,8 +1,12 @@
-# TLS termination for the reconciliation API.
+# Reverse proxy (and TLS, when DOMAIN is a hostname) for the reconciliation API.
 #
-# Caddy obtains and renews the Let's Encrypt certificate automatically; the name in
-# DOMAIN must already resolve to this droplet before the first start, or the ACME
-# challenge fails. http -> https redirection is Caddy's default.
+# DOMAIN is substituted before parsing, so it decides the mode:
+#   DOMAIN=api.example.com         Caddy obtains and renews a Let's Encrypt certificate and
+#                                  redirects http -> https. The name must resolve to this
+#                                  droplet before the first start, or the ACME challenge fails.
+#   DOMAIN=http://165.245.247.93   plain HTTP on port 80 for a bare IP: no certificate, no
+#                                  redirect. Let's Encrypt does not issue certificates for a
+#                                  bare IP here, and clients send no SNI for one.
 
 {
 	# Certificate expiry and renewal failures arrive here.
@@ -10,7 +14,10 @@
 }
 
 {$DOMAIN} {
-	encode zstd gzip
+	# Compress everything except server-sent events: a compressing encoder buffers output,
+	# which would hold progress events back instead of passing each one through at once.
+	@compressible not path /v1/imports/*/events
+	encode @compressible zstd gzip
 
 	reverse_proxy api:8080 {
 		header_up X-Forwarded-Proto {scheme}

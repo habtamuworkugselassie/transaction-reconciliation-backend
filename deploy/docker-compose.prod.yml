@@ -163,9 +163,9 @@ services:
     networks: [internal]
 
   caddy:
-    # TLS terminator and the only published ports. Obtains and renews the Let's Encrypt
-    # certificate for ${DOMAIN} automatically; the name must resolve to this droplet
-    # before the first start.
+    # Reverse proxy and the only published ports. With a hostname in DOMAIN it obtains
+    # and renews a Let's Encrypt certificate (the name must resolve to this droplet
+    # before the first start); with DOMAIN=http://<ip> it serves plain HTTP.
     image: caddy:2-alpine
     restart: unless-stopped
     depends_on: [api]

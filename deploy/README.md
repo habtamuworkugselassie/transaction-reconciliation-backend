@@ -4,16 +4,34 @@ Everything runs on one Ubuntu droplet: Postgres, Redis, Kafka (KRaft), the API, 
 and Caddy for TLS. That is six containers, defined in `deploy/docker-compose.prod.yml`.
 A 2 vCPU / 4 GB droplet is enough.
 
-The app image is built on the droplet from the checkout and tagged
-`habtamuwgs/transaction-reconciliation-service:latest`. That tag exists only locally: the
-compose file sets `pull_policy: never` for `api` and `worker`, so compose never looks
-for it in a registry.
+**Deploys are done by GitHub Actions** (`.github/workflows/deploy.yml`), on every push to
+`main` or by hand from the Actions tab:
 
-## 1. DNS
+1. **build** builds the image with the Dockerfile (Maven runs inside the build, so the
+   droplet never runs it). It pushes `ghcr.io/habtamuworkugselassie/transaction-reconciliation-backend`
+   tagged `:latest` and `:<commit sha>`.
+2. **deploy** connects to the droplet over SSH with a read-only, short-lived registry token.
+   There it runs `git pull --ff-only`, keeps the running image as a rollback copy, pulls the
+   new one and retags it to `habtamuwgs/transaction-reconciliation-service:latest`, then
+   runs `up -d api worker caddy` and reloads Caddy. It then waits up to 180 s for
+   `/health/ready` on the API and the worker. If either does not come up, it rolls both
+   back to the previous image and the run fails.
 
-Caddy requests a Let's Encrypt certificate for `DOMAIN`. That name must have an A record
-pointing at the droplet **before the first start**, or the certificate request fails and
-clients get a TLS error. Check it with `dig +short <DOMAIN>`.
+The retagged name is what `deploy/docker-compose.prod.yml` runs. It exists only on the
+droplet: the compose file sets `pull_policy: never` for `api` and `worker`, so compose never
+looks for it in a registry.
+
+## 1. Hostname or IP
+
+`DOMAIN` in `deploy/.env` decides how Caddy serves the API:
+
+| `DOMAIN` | Result |
+|---|---|
+| `api.example.com` | HTTPS with a Let's Encrypt certificate; http redirects to https. The name needs an A record pointing at the droplet **before the first start**, or the certificate request fails and clients get a TLS error. Check with `dig +short api.example.com`. |
+| `http://165.245.247.93` | plain HTTP on port 80, no certificate. Use this when there is no DNS name: a bare IP gets no Let's Encrypt certificate here, and without the `http://` prefix every request fails the TLS handshake. |
+
+To change it later, edit `deploy/.env` and recreate Caddy so it picks up the new value:
+`docker compose -f deploy/docker-compose.prod.yml up -d --force-recreate caddy`.
 
 ## 2. Prepare the droplet
 
@@ -36,23 +54,39 @@ openssl rand -base64 32   # use as POSTGRES_PASSWORD
 nano deploy/.env          # set DOMAIN, ACME_EMAIL, POSTGRES_USER, POSTGRES_PASSWORD
 ```
 
-## 3. Build the image and start the stack
+The workflow expects the checkout at `/opt/reconciliation`. If you clone it somewhere
+else, set the Actions variable `DEPLOY_DIR`.
+
+## 3. First deploy
+
+Run **Build and Deploy** from the Actions tab (or push to `main`). The first run also
+starts Postgres, Redis and Kafka (the API and worker depend on them) and Caddy. Flyway
+creates the schema when the API starts. To watch it on the droplet:
+
+```bash
+docker compose -f /opt/reconciliation/deploy/docker-compose.prod.yml logs -f api worker
+```
+
+**Without GitHub Actions**, build the image on the droplet under the name compose runs,
+and start the stack:
 
 ```bash
 cd /opt/reconciliation
 docker build -t habtamuwgs/transaction-reconciliation-service:latest .   # Maven runs inside the build; a few minutes
 docker compose -f deploy/docker-compose.prod.yml up -d
-docker compose -f deploy/docker-compose.prod.yml logs -f api worker      # Flyway migrates on first start
 ```
 
 ## 4. Verify
 
+`BASE` is `https://<hostname>` or `http://<ip>`, matching `DOMAIN`:
+
 ```bash
-curl -sI https://$DOMAIN/swagger-ui/index.html | head -1   # 200 with a valid certificate
-curl -s  https://$DOMAIN/health/ready                        # {"status":"UP",...}
-curl -s  https://$DOMAIN/metrics | head                      # Prometheus text
-curl -s -X POST https://$DOMAIN/v1/imports -H 'Idempotency-Key: smoke-1' \
-     -F file=@data/transactions-1000.ndjson                  # 202 {"id":...,"status":"pending"}
+BASE=http://165.245.247.93
+curl -sI $BASE/swagger-ui/index.html | head -1   # 200
+curl -s  $BASE/health/ready                        # {"status":"UP",...}
+curl -s  $BASE/metrics | head                      # Prometheus text
+curl -s -X POST $BASE/v1/imports -H 'Idempotency-Key: smoke-1' \
+     -F file=@data/transactions-1000.ndjson        # 202 {"id":...,"status":"pending"}
 ```
 
 The upload example uses a local file; create it first with
@@ -63,14 +97,27 @@ The worker's probes and metrics are reachable only on the compose network:
 
 ## 5. Deploying a change
 
+Push to `main`. Changes to `deploy/docker-compose.prod.yml` and the `Caddyfile` ship the
+same way, because the deploy pulls the checkout before starting anything. A change to
+`deploy/.env` is made on the droplet; the next deploy picks it up (or run
+`docker compose -f deploy/docker-compose.prod.yml up -d` there).
+
+**Rollback** is automatic when the new image does not become ready. To go back to an
+older build by hand, re-run that commit's **Build and Deploy** run from the Actions tab.
+Or, on the droplet:
+
 ```bash
-cd /opt/reconciliation && git pull --ff-only
-docker build -t habtamuwgs/transaction-reconciliation-service:latest .
+docker pull ghcr.io/habtamuworkugselassie/transaction-reconciliation-backend:<sha>
+docker tag  ghcr.io/habtamuworkugselassie/transaction-reconciliation-backend:<sha> habtamuwgs/transaction-reconciliation-service:latest
 docker compose -f deploy/docker-compose.prod.yml up -d api worker
 ```
 
-Flyway applies new migrations when the containers restart, and a migration cannot be
-rolled back by redeploying the old image, so back up the database first:
+Pulling by hand needs `docker login ghcr.io` unless the package is public (GitHub →
+Packages → package settings).
+
+**Migrations are not rolled back.** Flyway applies new migrations when the API restarts,
+and redeploying the old image does not undo them. Back up the database before merging a
+migration:
 `docker compose -f deploy/docker-compose.prod.yml exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' | gzip > db-$(date +%F).sql.gz`.
 
 Restarting the worker is graceful. It stops consuming, finishes the batches already in
