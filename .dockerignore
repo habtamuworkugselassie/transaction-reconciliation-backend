@@ -1,0 +1,7 @@
+target/
+data/
+*.ndjson
+.git/
+.idea/
+*.iml
+benchmark-results/
