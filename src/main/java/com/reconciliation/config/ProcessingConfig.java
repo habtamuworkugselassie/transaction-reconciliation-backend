@@ -1,0 +1,73 @@
+package com.reconciliation.config;
+
+import com.reconciliation.application.port.BatchWriter;
+import com.reconciliation.application.port.Clock;
+import com.reconciliation.application.port.FileStorage;
+import com.reconciliation.application.port.ImportJobQueue;
+import com.reconciliation.application.port.ImportRepository;
+import com.reconciliation.application.port.MetricsRecorder;
+import com.reconciliation.application.port.RetryPolicy;
+import com.reconciliation.application.port.RiskScorer;
+import com.reconciliation.application.port.TransientFailureClassifier;
+import com.reconciliation.application.usecase.ProcessImportUseCase;
+import com.reconciliation.domain.processing.RiskScoreCalculator;
+import com.reconciliation.infrastructure.retry.ExponentialBackoffRetryPolicy;
+import com.reconciliation.infrastructure.retry.SqlStateFailureClassifier;
+import com.reconciliation.infrastructure.risk.WorkerPoolRiskScorer;
+import com.reconciliation.infrastructure.worker.ImportWorker;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+/**
+ * Wires the processing side. The CPU pool, the use case and the worker only exist when
+ * {@code app.processing.enabled=true}; an API-only instance never scores anything and
+ * never joins the consumer group.
+ */
+@Configuration
+public class ProcessingConfig {
+
+    @Bean
+    TransientFailureClassifier transientFailureClassifier() {
+        return new SqlStateFailureClassifier();
+    }
+
+    @Bean
+    RetryPolicy retryPolicy(TransientFailureClassifier classifier, MetricsRecorder metrics, AppProperties props) {
+        var r = props.retry();
+        return new ExponentialBackoffRetryPolicy(r.maxAttempts(), r.initialBackoff(), r.maxBackoff(), r.multiplier(),
+                r.jitter(), classifier, metrics, d -> Thread.sleep(d.toMillis()));
+    }
+
+    @Bean(destroyMethod = "close")
+    @ConditionalOnProperty(prefix = "app.processing", name = "enabled", havingValue = "true", matchIfMissing = true)
+    WorkerPoolRiskScorer riskScorer(AppProperties props) {
+        int threads = props.risk().workerThreads() > 0
+                ? props.risk().workerThreads()
+                : Math.max(1, Runtime.getRuntime().availableProcessors());
+        return new WorkerPoolRiskScorer(threads, props.risk().queueCapacity(),
+                new RiskScoreCalculator(props.risk().hashIterations()));
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "app.processing", name = "enabled", havingValue = "true", matchIfMissing = true)
+    ProcessImportUseCase processImportUseCase(ImportRepository imports, ImportJobQueue queue, FileStorage storage,
+                                              RiskScorer scorer, BatchWriter batchWriter, RetryPolicy retry,
+                                              TransientFailureClassifier classifier, Clock clock,
+                                              MetricsRecorder metrics, AppProperties props) {
+        var p = props.processing();
+        return new ProcessImportUseCase(imports, queue, storage, scorer, batchWriter, retry, classifier, clock, metrics,
+                new ProcessImportUseCase.Settings(p.batchSize(), p.maxInFlightBatches(), p.maxLineLength(),
+                        p.maxRawValueLength(), p.maxAttempts()));
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "app.processing", name = "enabled", havingValue = "true", matchIfMissing = true)
+    ImportWorker importWorker(ImportJobQueue queue, ImportRepository imports, ProcessImportUseCase processImport,
+                              Clock clock, AppProperties props) {
+        var p = props.processing();
+        return new ImportWorker(queue, imports, processImport, clock, p.maxConcurrentImports(), p.heartbeatInterval(),
+                p.staleUploadTimeout(), p.redispatchInterval(), props.kafka().redeliveryDelay(),
+                props.shutdown().gracePeriod());
+    }
+}
