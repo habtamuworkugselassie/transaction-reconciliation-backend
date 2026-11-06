@@ -160,6 +160,11 @@ app:
     summary-live-ttl: ${CACHE_SUMMARY_LIVE_TTL:2s}
     summary-final-ttl: ${CACHE_SUMMARY_FINAL_TTL:1h}
     idempotency-ttl: ${CACHE_IDEMPOTENCY_TTL:24h}
+  events:
+    max-connections: ${EVENTS_MAX_CONNECTIONS:100}
+    poll-interval: ${EVENTS_POLL_INTERVAL:1s}
+    heartbeat-interval: ${EVENTS_HEARTBEAT_INTERVAL:15s}
+    timeout: ${EVENTS_TIMEOUT:30m}
 
 logging:
   level:

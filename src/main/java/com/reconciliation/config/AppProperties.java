@@ -26,7 +26,8 @@ public record AppProperties(
         @Valid @NotNull Retry retry,
         @Valid @NotNull Shutdown shutdown,
         @Valid @NotNull Kafka kafka,
-        @Valid @NotNull Cache cache
+        @Valid @NotNull Cache cache,
+        @Valid @NotNull Events events
 ) {
 
     /** Limits applied to the HTTP upload path. */
@@ -124,5 +125,17 @@ public record AppProperties(
     public record Shutdown(
             /** Upper bound on waiting for in-flight batches before forcing exit. */
             @NotNull @DefaultValue("30s") Duration gracePeriod
+    ) {}
+
+    /** Server-sent progress events (GET /v1/imports/{id}/events). */
+    public record Events(
+            /** Open streams allowed per instance; further requests get 429. */
+            @Min(1) @Max(10000) @DefaultValue("100") int maxConnections,
+            /** How often each stream re-reads the import's persisted progress. */
+            @NotNull @DefaultValue("1s") Duration pollInterval,
+            /** Comment line sent when nothing changed, so proxies keep the connection open. */
+            @NotNull @DefaultValue("15s") Duration heartbeatInterval,
+            /** A stream is closed after this long even if the import is still running; clients reconnect. */
+            @NotNull @DefaultValue("30m") Duration timeout
     ) {}
 }

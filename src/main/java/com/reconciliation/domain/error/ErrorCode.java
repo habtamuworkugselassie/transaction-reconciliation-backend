@@ -25,6 +25,8 @@ public enum ErrorCode {
     TOO_MANY_CONCURRENT_UPLOADS(429, ErrorCategory.BUSINESS_RULE, false),
     /** The provider exceeded its upload rate; Retry-After says when the window resets. */
     PROVIDER_RATE_LIMITED(429, ErrorCategory.BUSINESS_RULE, false),
+    /** All progress-stream slots on this instance are in use. */
+    TOO_MANY_EVENT_STREAMS(429, ErrorCategory.BUSINESS_RULE, false),
 
     // --- infrastructure ---
     UPLOAD_INTERRUPTED(400, ErrorCategory.INFRASTRUCTURE, false),

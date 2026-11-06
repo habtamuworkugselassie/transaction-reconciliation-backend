@@ -11,6 +11,8 @@ import com.reconciliation.application.usecase.GetImportSummaryUseCase;
 import com.reconciliation.application.usecase.GetImportUseCase;
 import com.reconciliation.application.usecase.ListRejectionsUseCase;
 import com.reconciliation.application.usecase.RetryImportUseCase;
+import com.reconciliation.domain.model.ImportJob;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.enums.ParameterIn;
@@ -45,19 +47,21 @@ public class ImportController {
     private final GetImportSummaryUseCase getSummary;
     private final ListRejectionsUseCase listRejections;
     private final RetryImportUseCase retryImport;
+    private final ImportProgressStreamer progressStreamer;
     private final String providerHeader;
     private final String defaultProvider;
 
     public ImportController(CreateImportUseCase createImport, GetImportUseCase getImport,
                             CancelImportUseCase cancelImport, GetImportSummaryUseCase getSummary,
                             ListRejectionsUseCase listRejections, RetryImportUseCase retryImport,
-                            String providerHeader, String defaultProvider) {
+                            ImportProgressStreamer progressStreamer, String providerHeader, String defaultProvider) {
         this.createImport = createImport;
         this.getImport = getImport;
         this.cancelImport = cancelImport;
         this.getSummary = getSummary;
         this.listRejections = listRejections;
         this.retryImport = retryImport;
+        this.progressStreamer = progressStreamer;
         this.providerHeader = providerHeader;
         this.defaultProvider = defaultProvider;
     }
@@ -141,6 +145,25 @@ public class ImportController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     public ResponseEntity<ImportStatusResponse> retry(@PathVariable UUID id) {
         return ResponseEntity.accepted().body(ImportStatusResponse.from(retryImport.execute(id)));
+    }
+
+    @GetMapping(path = "/{id}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @Operation(summary = "Stream import progress (server-sent events)",
+            description = "Sends a `progress` event with the same body as GET /v1/imports/{id} immediately, then "
+                    + "whenever the persisted status or counters change, and closes the stream once the import is "
+                    + "terminal. Idle streams receive a comment every 15 s. Streams close after 30 minutes; clients "
+                    + "reconnect (the standard EventSource does this automatically).")
+    @ApiResponse(responseCode = "200", description = "text/event-stream of `progress` events")
+    @ApiResponse(responseCode = "404", description = "Unknown import",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ErrorResponse.class)))
+    @ApiResponse(responseCode = "429", description = "Too many open streams on this instance",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ErrorResponse.class)))
+    public ResponseEntity<SseEmitter> events(@PathVariable UUID id) {
+        ImportJob job = getImport.execute(id);
+        return ResponseEntity.ok()
+                .header("Cache-Control", "no-cache")
+                .header("X-Accel-Buffering", "no") // tell buffering proxies to pass events through immediately
+                .body(progressStreamer.open(job));
     }
 
     @GetMapping("/{id}/summary")

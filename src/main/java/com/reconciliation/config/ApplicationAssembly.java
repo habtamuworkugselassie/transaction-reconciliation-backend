@@ -1,6 +1,7 @@
 package com.reconciliation.config;
 
 import com.reconciliation.api.ImportController;
+import com.reconciliation.api.ImportProgressStreamer;
 import com.reconciliation.api.RequestIdFilter;
 import com.reconciliation.application.port.Clock;
 import com.reconciliation.application.port.FileStorage;
@@ -105,11 +106,17 @@ public class ApplicationAssembly {
 
     // ---- HTTP ---------------------------------------------------------------
 
+    @Bean(destroyMethod = "close")
+    ImportProgressStreamer importProgressStreamer(GetImportUseCase get, AppProperties props) {
+        var e = props.events();
+        return new ImportProgressStreamer(get, e.maxConnections(), e.pollInterval(), e.heartbeatInterval(), e.timeout());
+    }
+
     @Bean
     ImportController importController(CreateImportUseCase create, GetImportUseCase get, CancelImportUseCase cancel,
                                       GetImportSummaryUseCase summary, ListRejectionsUseCase rejections,
-                                      RetryImportUseCase retry, AppProperties props) {
-        return new ImportController(create, get, cancel, summary, rejections, retry,
+                                      RetryImportUseCase retry, ImportProgressStreamer streamer, AppProperties props) {
+        return new ImportController(create, get, cancel, summary, rejections, retry, streamer,
                 props.upload().providerHeader(), props.upload().defaultProvider());
     }
 

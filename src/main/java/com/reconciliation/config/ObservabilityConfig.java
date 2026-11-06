@@ -1,5 +1,6 @@
 package com.reconciliation.config;
 
+import com.reconciliation.api.ImportProgressStreamer;
 import com.reconciliation.application.port.FileStorage;
 import com.reconciliation.application.port.ImportJobQueue;
 import com.reconciliation.application.port.MetricsRecorder;
@@ -76,6 +77,13 @@ public class ObservabilityConfig {
                     .register(registry);
         }
         return reader;
+    }
+
+    @Bean
+    Gauge progressStreamsGauge(MeterRegistry registry, ImportProgressStreamer streamer, AppProperties props) {
+        Gauge.builder("sse.streams.capacity", props.events(), AppProperties.Events::maxConnections).register(registry);
+        return Gauge.builder("sse.streams.active", streamer, ImportProgressStreamer::openStreams)
+                .description("Open server-sent progress streams on this instance").register(registry);
     }
 
     public record WorkerGauges(ImportWorker worker, WorkerPoolRiskScorer scorer) {}

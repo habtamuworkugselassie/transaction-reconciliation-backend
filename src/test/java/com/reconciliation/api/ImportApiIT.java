@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
@@ -45,6 +46,11 @@ import org.springframework.util.MultiValueMap;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.math.BigDecimal;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.util.Iterator;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -96,7 +102,8 @@ import static org.assertj.core.api.Assertions.assertThat;
                 "app.upload.max-file-size-bytes=" + ImportApiIT.MAX_FILE_BYTES,
                 "app.upload.max-concurrent-uploads=32",
                 "app.retry.initial-backoff=10ms",
-                "app.retry.max-backoff=50ms"
+                "app.retry.max-backoff=50ms",
+                "app.events.poll-interval=100ms"
         })
 class ImportApiIT {
 
@@ -145,6 +152,7 @@ class ImportApiIT {
         }
     }
 
+    @LocalServerPort int port;
     @Autowired TestRestTemplate http;
     @Autowired ObjectMapper json;
     @Autowired FixedClock clock;
@@ -445,6 +453,7 @@ class ImportApiIT {
                 .contains("http_server_requests_seconds_count")
                 .contains("import_queue_depth")
                 .contains("upload_slots_capacity")
+                .contains("sse_streams_active")
                 .contains("imports_accepted_total")
                 .contains("imports_replayed_total")
                 .contains("application=\"transaction-reconciliation-service\"");
@@ -510,6 +519,67 @@ class ImportApiIT {
 
         assertError(r, 409, "IMPORT_NOT_RETRYABLE");
         assertThat(json.readTree(r.getBody()).at("/error/message").asText()).contains("Idempotency-Key");
+    }
+
+    // ---- server-sent progress ---------------------------------------------------
+
+    @Test
+    void progressStreamSendsTheCurrentStateThenChangesAndEndsWhenTheImportIsTerminal() throws Exception {
+        UUID id = idOf(upload("sse-1", Fixtures.validLines(30)));
+        HttpClient client = HttpClient.newHttpClient();
+        HttpResponse<java.util.stream.Stream<String>> response = client.send(
+                HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/v1/imports/" + id + "/events"))
+                        .header("Accept", "text/event-stream").GET().build(),
+                HttpResponse.BodyHandlers.ofLines());
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.headers().firstValue("Content-Type").orElse("")).startsWith("text/event-stream");
+        Iterator<String> lines = response.body().iterator();
+
+        JsonNode first = nextEvent(lines);
+        assertThat(first.get("status").asText()).isEqualTo("pending");
+
+        assertThat(process(id, "worker-a", batchWriter)).isEqualTo(ProcessingOutcome.COMPLETED);
+
+        List<JsonNode> later = new ArrayList<>();
+        ExecutorService reader = Executors.newSingleThreadExecutor();
+        try {
+            reader.submit(() -> {
+                JsonNode e;
+                while ((e = nextEvent(lines)) != null) {
+                    later.add(e);
+                }
+                return null;
+            }).get(20, TimeUnit.SECONDS); // returns because the server closes the stream
+        } finally {
+            reader.shutdownNow();
+        }
+        assertThat(later).isNotEmpty();
+        JsonNode last = later.getLast();
+        assertThat(last.get("status").asText()).isEqualTo("completed");
+        assertThat(last.at("/progress/processed").asLong()).isEqualTo(30);
+    }
+
+    @Test
+    void progressStreamForAnUnknownImportIsAJson404() throws Exception {
+        HttpResponse<String> r = HttpClient.newHttpClient().send(
+                HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/v1/imports/" + UUID.randomUUID() + "/events"))
+                        .header("Accept", "text/event-stream").GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        assertThat(r.statusCode()).isEqualTo(404);
+        assertThat(json.readTree(r.body()).at("/error/code").asText()).isEqualTo("IMPORT_NOT_FOUND");
+    }
+
+    /** The data of the next SSE event, or null when the stream has ended. Skips comments and other fields. */
+    private JsonNode nextEvent(Iterator<String> lines) throws IOException {
+        while (lines.hasNext()) {
+            String line = lines.next();
+            if (line.startsWith("data:")) {
+                return json.readTree(line.substring(5).trim());
+            }
+        }
+        return null;
     }
 
     // ---- crash and resume -----------------------------------------------------
