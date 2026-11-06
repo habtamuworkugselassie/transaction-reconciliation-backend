@@ -9,6 +9,7 @@ import com.reconciliation.application.port.ImportRepository;
 import com.reconciliation.application.port.ImportRepository.Reservation;
 import com.reconciliation.application.port.MetricsRecorder;
 import com.reconciliation.application.port.UploadLimiter;
+import com.reconciliation.application.port.UploadRateLimiter;
 import com.reconciliation.application.upload.BoundedHashingInputStream;
 import com.reconciliation.application.upload.ContentSniffer;
 import com.reconciliation.application.upload.Filenames;
@@ -71,11 +72,20 @@ public class CreateImportUseCase {
     private final IdempotencyCache idempotencyCache;
     private final Duration idempotencyTtl;
     private final long maxFileSizeBytes;
+    private final UploadRateLimiter rateLimiter;
 
     public CreateImportUseCase(ImportRepository imports, FileStorage storage, ImportJobQueue queue,
                                UploadLimiter uploadLimiter, Clock clock, IdGenerator ids,
                                MetricsRecorder metrics, IdempotencyCache idempotencyCache, Duration idempotencyTtl,
                                long maxFileSizeBytes) {
+        this(imports, storage, queue, uploadLimiter, clock, ids, metrics, idempotencyCache, idempotencyTtl,
+                maxFileSizeBytes, UploadRateLimiter.UNLIMITED);
+    }
+
+    public CreateImportUseCase(ImportRepository imports, FileStorage storage, ImportJobQueue queue,
+                               UploadLimiter uploadLimiter, Clock clock, IdGenerator ids,
+                               MetricsRecorder metrics, IdempotencyCache idempotencyCache, Duration idempotencyTtl,
+                               long maxFileSizeBytes, UploadRateLimiter rateLimiter) {
         this.imports = imports;
         this.storage = storage;
         this.queue = queue;
@@ -86,6 +96,7 @@ public class CreateImportUseCase {
         this.idempotencyCache = idempotencyCache;
         this.idempotencyTtl = idempotencyTtl;
         this.maxFileSizeBytes = maxFileSizeBytes;
+        this.rateLimiter = rateLimiter;
     }
 
     public Result execute(Command command) {
@@ -101,11 +112,22 @@ public class CreateImportUseCase {
             return new Result(cached.get(), true);
         }
 
+        // Per-provider rate limit, before any slot or row is taken. A replay answered from the
+        // cache above never counts; a replay that reaches the database path does, which is
+        // the conservative side.
+        UploadRateLimiter.Decision rate = rateLimiter.tryAcquire(provider);
+        if (!rate.allowed()) {
+            metrics.uploadRejected("provider_rate_limit");
+            throw new AppException(ErrorCode.PROVIDER_RATE_LIMITED,
+                    "Upload rate limit for this provider reached; retry after the indicated delay",
+                    null, Map.of("retryAfterSeconds", rate.retryAfterSeconds(), "provider", provider));
+        }
+
         if (!uploadLimiter.tryAcquire()) {
             metrics.uploadRejected("concurrency");
             throw new AppException(ErrorCode.TOO_MANY_CONCURRENT_UPLOADS,
                     "Too many uploads in progress; retry shortly",
-                    null, Map.of("capacity", uploadLimiter.capacity()));
+                    null, Map.of("capacity", uploadLimiter.capacity(), "retryAfterSeconds", 1));
         }
         try {
             Instant now = clock.now();

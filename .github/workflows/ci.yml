@@ -14,9 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
-    # Integration tests (*IT) run against this Postgres instead of starting a
-    # Testcontainers one: PostgresSupport picks up TEST_DATABASE_URL. The schema is
-    # dropped and re-migrated by the tests, so this must never be a real database.
+    # Integration tests (*IT) run against these services instead of starting
+    # Testcontainers: PostgresSupport picks up TEST_DATABASE_URL, the Redis test
+    # TEST_REDIS_HOST. The tests drop the schema and flush Redis, so these must never
+    # be real instances.
     services:
       postgres:
         image: postgres:16-alpine
@@ -30,6 +31,16 @@ jobs:
           --health-cmd "pg_isready -U postgres -d reconciliation_test"
           --health-interval 5s
           --health-timeout 5s
+          --health-retries 10
+      # For RedisUploadRateLimiterIT (TEST_REDIS_HOST); flushed by the test.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
           --health-retries 10
 
     steps:
@@ -46,6 +57,8 @@ jobs:
           TEST_DATABASE_URL: jdbc:postgresql://localhost:5432/reconciliation_test
           TEST_DATABASE_USERNAME: postgres
           TEST_DATABASE_PASSWORD: postgres
+          TEST_REDIS_HOST: localhost
+          TEST_REDIS_PORT: "6379"
         run: ./mvnw -B -ntp -Pintegration verify
 
       - name: Upload test reports

@@ -37,7 +37,10 @@ public record AppProperties(
             @Min(1) @Max(256) @DefaultValue("4") int maxConcurrentUploads,
             /** Provider is taken from this header; it is part of the duplicate-detection key. */
             @NotBlank @DefaultValue("X-Provider-Id") String providerHeader,
-            @NotBlank @DefaultValue("default") String defaultProvider
+            @NotBlank @DefaultValue("default") String defaultProvider,
+            /** Uploads admitted per provider per window; 0 disables the limit. Enforced in Redis, fails open. */
+            @Min(0) @Max(1000000) @DefaultValue("0") int providerRateLimit,
+            @NotNull @DefaultValue("1m") Duration providerRateWindow
     ) {}
 
     /** Where uploaded files live. The abstraction allows an S3 adapter later. */

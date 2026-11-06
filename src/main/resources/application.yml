@@ -119,6 +119,8 @@ app:
     max-concurrent-uploads: ${UPLOAD_MAX_CONCURRENT:4}
     provider-header: X-Provider-Id
     default-provider: default
+    provider-rate-limit: ${UPLOAD_PROVIDER_RATE_LIMIT:0}
+    provider-rate-window: ${UPLOAD_PROVIDER_RATE_WINDOW:1m}
   storage:
     root: ${STORAGE_ROOT:./data/uploads}
   processing:

@@ -8,6 +8,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -47,7 +48,15 @@ public class GlobalExceptionHandler {
         } finally {
             MDC.remove("errorCode");
         }
-        return respond(e.code(), e.getMessage(), requestId);
+        ResponseEntity<ErrorResponse> response = respond(e.code(), e.getMessage(), requestId);
+        // 429s tell the client when to come back. The value is computed by the use case and
+        // carried in the diagnostics, which are otherwise only logged.
+        if (e.code().httpStatus() == 429 && e.diagnostics().get("retryAfterSeconds") instanceof Number seconds) {
+            return ResponseEntity.status(response.getStatusCode()).headers(response.getHeaders())
+                    .header(HttpHeaders.RETRY_AFTER, String.valueOf(Math.max(1, seconds.longValue())))
+                    .body(response.getBody());
+        }
+        return response;
     }
 
     @ExceptionHandler(MissingRequestHeaderException.class)

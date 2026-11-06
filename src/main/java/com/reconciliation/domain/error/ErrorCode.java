@@ -23,6 +23,8 @@ public enum ErrorCode {
     IMPORT_NOT_RETRYABLE(409, ErrorCategory.BUSINESS_RULE, false),
     IMPORT_STATE_CONFLICT(409, ErrorCategory.BUSINESS_RULE, false),
     TOO_MANY_CONCURRENT_UPLOADS(429, ErrorCategory.BUSINESS_RULE, false),
+    /** The provider exceeded its upload rate; Retry-After says when the window resets. */
+    PROVIDER_RATE_LIMITED(429, ErrorCategory.BUSINESS_RULE, false),
 
     // --- infrastructure ---
     UPLOAD_INTERRUPTED(400, ErrorCategory.INFRASTRUCTURE, false),

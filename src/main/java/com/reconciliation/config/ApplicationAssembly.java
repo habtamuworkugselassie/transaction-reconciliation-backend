@@ -13,6 +13,7 @@ import com.reconciliation.application.port.RejectionRepository;
 import com.reconciliation.application.port.SummaryCache;
 import com.reconciliation.application.port.SummaryRepository;
 import com.reconciliation.application.port.UploadLimiter;
+import com.reconciliation.application.port.UploadRateLimiter;
 import com.reconciliation.application.usecase.CancelImportUseCase;
 import com.reconciliation.application.usecase.CreateImportUseCase;
 import com.reconciliation.application.usecase.GetImportSummaryUseCase;
@@ -69,9 +70,9 @@ public class ApplicationAssembly {
     CreateImportUseCase createImportUseCase(ImportRepository imports, FileStorage storage, ImportJobQueue queue,
                                             UploadLimiter uploadLimiter, Clock clock, IdGenerator ids,
                                             MetricsRecorder metrics, IdempotencyCache idempotencyCache,
-                                            AppProperties props) {
+                                            UploadRateLimiter rateLimiter, AppProperties props) {
         return new CreateImportUseCase(imports, storage, queue, uploadLimiter, clock, ids, metrics, idempotencyCache,
-                props.cache().idempotencyTtl(), props.upload().maxFileSizeBytes());
+                props.cache().idempotencyTtl(), props.upload().maxFileSizeBytes(), rateLimiter);
     }
 
     @Bean

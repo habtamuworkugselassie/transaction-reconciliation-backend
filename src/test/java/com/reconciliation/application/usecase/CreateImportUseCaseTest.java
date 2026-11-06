@@ -243,6 +243,33 @@ class CreateImportUseCaseTest {
     }
 
     @Test
+    void providerOverItsRateLimitIsRefusedWith429BeforeAnythingIsReservedOrRead() {
+        List<String> asked = new java.util.ArrayList<>();
+        CreateImportUseCase limited = new CreateImportUseCase(imports, storage, queue, limiter, clock,
+                new SequentialIdGenerator(), metrics, com.reconciliation.application.port.IdempotencyCache.NONE,
+                Duration.ofHours(1), MAX_BYTES, provider -> {
+                    asked.add(provider);
+                    return new com.reconciliation.application.port.UploadRateLimiter.Decision(false, 42);
+                });
+        java.util.concurrent.atomic.AtomicBoolean bodyRead = new java.util.concurrent.atomic.AtomicBoolean();
+        Command cmd = new Command("rate-1", Fixtures.PROVIDER, "f.ndjson", () -> {
+            bodyRead.set(true);
+            return new ByteArrayInputStream(Fixtures.validLines(1).getBytes(StandardCharsets.UTF_8));
+        });
+
+        assertThatThrownBy(() -> limited.execute(cmd))
+                .isInstanceOfSatisfying(AppException.class, e -> {
+                    assertThat(e.code()).isEqualTo(ErrorCode.PROVIDER_RATE_LIMITED);
+                    assertThat(e.diagnostics()).containsEntry("retryAfterSeconds", 42L);
+                });
+        assertThat(asked).containsExactly(Fixtures.PROVIDER);
+        assertThat(imports.size()).isZero();
+        assertThat(bodyRead).isFalse();
+        assertThat(limiter.available()).isEqualTo(2);
+        assertThat(metrics.events).contains("uploadRejected:provider_rate_limit");
+    }
+
+    @Test
     void uploadSlotIsReleasedEvenWhenTheUploadFails() {
         assertThatThrownBy(() -> useCase.execute(command("key-1", ""))).isInstanceOf(AppException.class);
         assertThat(limiter.available()).isEqualTo(2);
