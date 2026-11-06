@@ -4,6 +4,7 @@ import com.reconciliation.application.port.Clock;
 import com.reconciliation.application.port.ImportJobQueue;
 import com.reconciliation.application.port.ImportRepository;
 import com.reconciliation.infrastructure.messaging.ImportRequestedEvent;
+import com.reconciliation.infrastructure.messaging.InvalidImportEventException;
 import com.reconciliation.infrastructure.messaging.KafkaHealthIndicator;
 import com.reconciliation.infrastructure.messaging.KafkaImportJobQueue;
 import com.reconciliation.infrastructure.persistence.JooqImportJobStore;
@@ -32,6 +33,14 @@ import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.kafka.support.serializer.JsonSerializer;
 import org.springframework.util.backoff.FixedBackOff;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.ByteArraySerializer;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
+import org.springframework.kafka.support.serializer.DelegatingByTypeSerializer;
+import org.springframework.kafka.support.serializer.DeserializationException;
+
+import java.util.LinkedHashMap;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -71,6 +80,24 @@ public class MessagingConfig {
                 .build();
     }
 
+    /**
+     * Dead-letter topic ({@code <topic>.DLT}) for records the worker cannot use at all:
+     * bytes that are not an {@link ImportRequestedEvent}, or an event without an import id.
+     * Same partition count as the main topic, because a record goes to the partition it
+     * came from.
+     */
+    @Bean
+    NewTopic importsDeadLetterTopic(AppProperties props) {
+        return TopicBuilder.name(deadLetterTopic(props))
+                .partitions(props.kafka().partitions())
+                .replicas(1)
+                .build();
+    }
+
+    static String deadLetterTopic(AppProperties props) {
+        return props.kafka().topic() + ".DLT";
+    }
+
     @Bean
     JooqImportJobStore importJobStore(DSLContext db) {
         return new JooqImportJobStore(db);
@@ -108,10 +135,32 @@ public class MessagingConfig {
         return new DefaultKafkaConsumerFactory<>(cfg);
     }
 
+    /**
+     * Producer for the dead-letter topic. A dead record is either the raw bytes that failed
+     * to deserialise (restored from the exception) or a parsed event that was invalid, so
+     * values are serialised by type.
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "app.processing", name = "enabled", havingValue = "true", matchIfMissing = true)
+    KafkaTemplate<Object, Object> deadLetterKafkaTemplate(KafkaProperties props) {
+        Map<String, Object> cfg = new HashMap<>(props.buildProducerProperties());
+        cfg.put(ProducerConfig.ACKS_CONFIG, "all");
+        cfg.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        Map<Class<?>, org.apache.kafka.common.serialization.Serializer<?>> byType = new LinkedHashMap<>();
+        byType.put(byte[].class, new ByteArraySerializer());
+        byType.put(String.class, new StringSerializer());
+        JsonSerializer<Object> json = new JsonSerializer<>();
+        json.setAddTypeInfo(false);
+        byType.put(Object.class, json);
+        DelegatingByTypeSerializer serializer = new DelegatingByTypeSerializer(byType, true);
+        return new KafkaTemplate<>(new DefaultKafkaProducerFactory<>(cfg, serializer, serializer));
+    }
+
     @Bean
     @ConditionalOnProperty(prefix = "app.processing", name = "enabled", havingValue = "true", matchIfMissing = true)
     ConcurrentMessageListenerContainer<String, ImportRequestedEvent> importEventListenerContainer(
-            ConsumerFactory<String, ImportRequestedEvent> factory, ImportWorker worker, AppProperties props) {
+            ConsumerFactory<String, ImportRequestedEvent> factory, ImportWorker worker, AppProperties props,
+            KafkaTemplate<Object, Object> deadLetterKafkaTemplate, MeterRegistry meters) {
         ContainerProperties cp = new ContainerProperties(props.kafka().topic());
         cp.setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
         cp.setGroupId(props.kafka().consumerGroup());
@@ -120,10 +169,35 @@ public class MessagingConfig {
         cp.setPollTimeout(1000);
         var container = new ConcurrentMessageListenerContainer<>(factory, cp);
         container.setConcurrency(props.processing().maxConcurrentImports());
-        // Poison records (undeserialisable) are logged and skipped, never retried.
-        container.setCommonErrorHandler(new DefaultErrorHandler(new FixedBackOff(0L, 0L)));
+        // Poison records are never retried (they cannot succeed). They are published to the
+        // dead-letter topic with Spring Kafka's exception headers (class, message, stack,
+        // original topic/partition/offset), counted, and their offset is committed. The
+        // database stays the source of truth: if a real import's event was lost this way, the
+        // worker's sweep re-publishes it from its pending row.
+        String dlt = deadLetterTopic(props);
+        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(deadLetterKafkaTemplate,
+                (record, ex) -> new TopicPartition(dlt, record.partition()));
+        DefaultErrorHandler errorHandler = new DefaultErrorHandler((record, ex) -> {
+            meters.counter("kafka.dead.letter.records", "reason", deadLetterReason(ex)).increment();
+            recoverer.accept(record, ex);
+        }, new FixedBackOff(0L, 0L));
+        errorHandler.setCommitRecovered(true);
+        container.setCommonErrorHandler(errorHandler);
         container.setAutoStartup(false); // the worker starts and stops it in its own lifecycle phase
         worker.attach(container);
         return container;
+    }
+
+    /** Low-cardinality label for the dead-letter counter. */
+    static String deadLetterReason(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof DeserializationException) {
+                return "deserialization";
+            }
+            if (t instanceof InvalidImportEventException) {
+                return "invalid_event";
+            }
+        }
+        return "other";
     }
 }

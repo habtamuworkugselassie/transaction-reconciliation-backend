@@ -8,6 +8,7 @@ import com.reconciliation.application.processing.ProcessingOutcome;
 import com.reconciliation.application.usecase.ProcessImportUseCase;
 import com.reconciliation.domain.model.ImportJob;
 import com.reconciliation.infrastructure.messaging.ImportRequestedEvent;
+import com.reconciliation.infrastructure.messaging.InvalidImportEventException;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -182,9 +183,12 @@ public final class ImportWorker implements SmartLifecycle, AcknowledgingMessageL
     public void onMessage(ConsumerRecord<String, ImportRequestedEvent> record, Acknowledgment ack) {
         ImportRequestedEvent event = record.value();
         if (event == null || event.importId() == null) {
-            log.warn("Skipping malformed import event at {}-{}@{}", record.topic(), record.partition(), record.offset());
-            ack.acknowledge();
-            return;
+            // Not retryable and not ours to drop silently: the container's error handler
+            // publishes it to the dead-letter topic and commits the offset.
+            log.warn("Malformed import event at {}-{}@{}; sending to dead-letter topic", record.topic(),
+                    record.partition(), record.offset());
+            throw new InvalidImportEventException("Import event without importId at " + record.topic() + "-"
+                    + record.partition() + "@" + record.offset());
         }
         if (shuttingDown) {
             return; // not acknowledged: redelivered to the next consumer
