@@ -10,6 +10,8 @@ import com.reconciliation.infrastructure.persistence.JooqBatchWriter;
 import com.reconciliation.infrastructure.persistence.JooqImportRepository;
 import com.reconciliation.infrastructure.persistence.JooqRejectionRepository;
 import com.reconciliation.infrastructure.persistence.JooqSummaryRepository;
+import com.reconciliation.infrastructure.tracing.ObservedBatchWriter;
+import io.micrometer.observation.ObservationRegistry;
 import org.jooq.DSLContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -39,8 +41,10 @@ public class PersistenceConfig {
         return new JooqRejectionRepository(db, objectMapper);
     }
 
+    /** Observed so each batch write is a span under the import's trace (no-op when tracing is not exported). */
     @Bean
-    BatchWriter batchWriter(DSLContext db, PlatformTransactionManager txManager, Clock clock) {
-        return new JooqBatchWriter(db, new TransactionTemplate(txManager), clock);
+    BatchWriter batchWriter(DSLContext db, PlatformTransactionManager txManager, Clock clock,
+                            ObservationRegistry observations) {
+        return new ObservedBatchWriter(new JooqBatchWriter(db, new TransactionTemplate(txManager), clock), observations);
     }
 }

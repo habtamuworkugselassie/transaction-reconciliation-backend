@@ -105,6 +105,12 @@ management:
     metrics:
       export:
         enabled: true
+  # Tracing is always on in-process (trace and span ids reach the logs). Spans are exported
+  # only when an OTLP endpoint is configured: MANAGEMENT_OTLP_TRACING_ENDPOINT, e.g.
+  # http://jaeger:4318/v1/traces (see docker-compose.tracing.yml).
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
 
 springdoc:
   api-docs:

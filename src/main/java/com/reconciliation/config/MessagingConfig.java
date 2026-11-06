@@ -69,7 +69,10 @@ public class MessagingConfig {
     @Bean
     KafkaTemplate<String, ImportRequestedEvent> importEventKafkaTemplate(
             ProducerFactory<String, ImportRequestedEvent> factory) {
-        return new KafkaTemplate<>(factory);
+        KafkaTemplate<String, ImportRequestedEvent> template = new KafkaTemplate<>(factory);
+        // Producer span + W3C trace headers on the record, so the worker continues the trace.
+        template.setObservationEnabled(true);
+        return template;
     }
 
     @Bean
@@ -167,6 +170,7 @@ public class MessagingConfig {
         cp.setMessageListener(worker);
         cp.setShutdownTimeout(props.shutdown().gracePeriod().toMillis());
         cp.setPollTimeout(1000);
+        cp.setObservationEnabled(true); // consumer span, parented by the producer's trace headers
         var container = new ConcurrentMessageListenerContainer<>(factory, cp);
         container.setConcurrency(props.processing().maxConcurrentImports());
         // Poison records are never retried (they cannot succeed). They are published to the

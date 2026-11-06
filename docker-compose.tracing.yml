@@ -1,0 +1,26 @@
+# Optional tracing overlay: adds Jaeger and points the API and worker at it.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.tracing.yml up --build
+#
+# Jaeger UI: http://localhost:16686 (service "transaction-reconciliation-service").
+# One trace follows an upload through HTTP -> Kafka -> the worker's batch writes.
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.65.0
+    ports:
+      - "16686:16686"   # UI
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    restart: unless-stopped
+
+  api:
+    environment:
+      MANAGEMENT_OTLP_TRACING_ENDPOINT: http://jaeger:4318/v1/traces
+    depends_on:
+      jaeger: { condition: service_started }
+
+  worker:
+    environment:
+      MANAGEMENT_OTLP_TRACING_ENDPOINT: http://jaeger:4318/v1/traces
+    depends_on:
+      jaeger: { condition: service_started }

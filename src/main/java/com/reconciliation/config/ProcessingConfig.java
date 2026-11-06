@@ -17,7 +17,10 @@ import com.reconciliation.infrastructure.retry.ExponentialBackoffRetryPolicy;
 import com.reconciliation.infrastructure.retry.SqlStateFailureClassifier;
 import com.reconciliation.infrastructure.risk.WorkerPoolRiskScorer;
 import com.reconciliation.infrastructure.worker.ImportWorker;
+import io.micrometer.context.ContextSnapshotFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+
+import java.util.concurrent.ThreadFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -58,9 +61,14 @@ public class ProcessingConfig {
                                               TransientFailureClassifier classifier, Clock clock,
                                               MetricsRecorder metrics, AppProperties props) {
         var p = props.processing();
+        // The writer thread starts on the claiming (Kafka listener) thread, which runs inside the
+        // consumer's trace. Capturing the context there and restoring it on the writer makes
+        // every batch-write span a child of that trace.
+        ContextSnapshotFactory snapshots = ContextSnapshotFactory.builder().build();
+        ThreadFactory writerThreads = task -> Thread.ofVirtual().unstarted(snapshots.captureAll().wrap(task));
         return new ProcessImportUseCase(imports, queue, storage, scorer, batchWriter, retry, classifier, clock, metrics,
                 new ProcessImportUseCase.Settings(p.batchSize(), p.maxInFlightBatches(), p.maxLineLength(),
-                        p.maxRawValueLength(), p.maxAttempts()));
+                        p.maxRawValueLength(), p.maxAttempts()), writerThreads);
     }
 
     @Bean

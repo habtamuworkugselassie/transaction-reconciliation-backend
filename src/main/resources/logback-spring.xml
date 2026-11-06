@@ -20,6 +20,9 @@
             <includeMdcKeyName>attempt</includeMdcKeyName>
             <includeMdcKeyName>errorCode</includeMdcKeyName>
             <includeMdcKeyName>shutdown</includeMdcKeyName>
+            <!-- set by Micrometer Tracing; correlate a log line with its trace -->
+            <includeMdcKeyName>traceId</includeMdcKeyName>
+            <includeMdcKeyName>spanId</includeMdcKeyName>
             <includeMdcKeyName>providerId</includeMdcKeyName>
             <shortenedLoggerNameLength>36</shortenedLoggerNameLength>
             <!-- Stack traces are shortened; request payloads are never logged. -->

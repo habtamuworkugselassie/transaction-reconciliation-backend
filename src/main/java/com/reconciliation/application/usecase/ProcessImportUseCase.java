@@ -38,6 +38,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -78,11 +79,25 @@ public class ProcessImportUseCase {
     private final Clock clock;
     private final MetricsRecorder metrics;
     private final Settings settings;
+    private final ThreadFactory writerThreads;
 
     public ProcessImportUseCase(ImportRepository imports, ImportJobQueue queue, FileStorage storage,
                                 RiskScorer scorer, BatchWriter batchWriter, RetryPolicy retry,
                                 TransientFailureClassifier transientFailures, Clock clock,
                                 MetricsRecorder metrics, Settings settings) {
+        this(imports, queue, storage, scorer, batchWriter, retry, transientFailures, clock, metrics, settings,
+                Thread.ofVirtual().factory());
+    }
+
+    /**
+     * @param writerThreads creates the per-import writer thread. Injected so the composition
+     *                      root can carry context (the trace) from the claiming thread to the
+     *                      writer without this class knowing about tracing.
+     */
+    public ProcessImportUseCase(ImportRepository imports, ImportJobQueue queue, FileStorage storage,
+                                RiskScorer scorer, BatchWriter batchWriter, RetryPolicy retry,
+                                TransientFailureClassifier transientFailures, Clock clock,
+                                MetricsRecorder metrics, Settings settings, ThreadFactory writerThreads) {
         this.imports = imports;
         this.queue = queue;
         this.storage = storage;
@@ -93,6 +108,7 @@ public class ProcessImportUseCase {
         this.clock = clock;
         this.metrics = metrics;
         this.settings = settings;
+        this.writerThreads = writerThreads;
     }
 
     public ProcessingOutcome execute(ImportJob job, String workerId, CancellationToken token) {
@@ -198,7 +214,9 @@ public class ProcessImportUseCase {
 
         /** Returns the failure that stopped the pipeline, or null. */
         Throwable run() {
-            Thread writer = Thread.ofVirtual().name("import-writer-" + job.id()).start(this::writerLoop);
+            Thread writer = writerThreads.newThread(this::writerLoop);
+            writer.setName("import-writer-" + job.id());
+            writer.start();
             Throwable readerFailure = null;
             try {
                 readAndSubmit();
