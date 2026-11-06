@@ -82,8 +82,10 @@ Micrometer and tests can assert on what was recorded (`RecordingMetrics`).
 | `processing` | `failed` | permanent failure or attempts exhausted |
 | `cancelling` | `cancelled` | the worker (or the next claimer of an expired lease) finalises |
 | `cancelling` | `failed` | failure while winding down |
+| `failed` | `pending` | only through an explicit client retry (`POST .../retry`), never automatically |
 
-`completed`, `failed` and `cancelled` are terminal.
+`completed`, `failed` and `cancelled` are terminal: nothing moves them on its own. The one
+way out of `failed` is a client request, and it is bounded (see [Manual retry](#manual-retry)).
 
 The assignment lists `pending`, `processing`, `completed`, `failed`, `cancelling` and
 `cancelled`. The service adds **`uploading`**: the idempotency key is reserved and the
@@ -234,6 +236,7 @@ SHA-256 over the fingerprint up to 15). The last component iterates the hash
 | Worker dies mid-import | lease expires (30 s); the uncommitted Kafka offset is redelivered after rebalance and the sweep re-publishes expired leases; the next claim resumes from the checkpoint |
 | Database connection lost | batch write retried with backoff (5 attempts, 200 ms → 5 s, ±25 % jitter); then the import is released for another attempt (3 attempts total) or failed (see [retry strategy](#retry-strategy)) |
 | Same event delivered twice | second claim fails (live lease or terminal status) and is acknowledged |
+| Unreadable record on the topic (not JSON, or no import id) | not retried; published to `imports.requested.DLT` with the exception headers, counted in `kafka_dead_letter_records_total{reason}`, offset committed; a real import whose event was lost this way is re-published by the sweep from its `pending` row |
 | Batch committed, progress update "fails" | impossible by construction: they are the same transaction |
 | Cancel during processing | `cancel_requested` observed between batches; in-flight batches commit; status `cancelled`; nothing after the checkpoint is written |
 | SIGTERM | readiness DOWN, consumer paused, HTTP drains, active imports get `SHUTDOWN`, finish in-flight batches, release the job; grace period 30 s, then forced release (see [grace-period expiry](#graceful-shutdown-and-grace-period-expiry)); next worker resumes |
@@ -395,5 +398,165 @@ Size and line limits, content sniffing instead of trusting MIME type or filename
 sanitised filenames stored only as metadata, server-generated storage keys (no path
 input), strict JSON parsing, control-character rejection, bounded raw excerpts in
 rejections, parameterised SQL via jOOQ, request ids instead of stack traces in
-responses, low-cardinality metric tags. Authentication would be added as a servlet
-filter that resolves the principal to a provider id and passes it to the same use cases.
+responses, low-cardinality metric tags. Authentication is an opt-in servlet filter that
+resolves an API key to a provider id; the use cases are unchanged (see
+[Authentication](#authentication-opt-in)).
+
+## Optional features
+
+Each of these adds behaviour around the core without changing its guarantees. All the
+optional ones are off by default.
+
+### Manual retry
+
+`POST /v1/imports/{id}/retry` moves a `failed` import back to `pending` with one
+conditional update (`RetryImportUseCase` → `ImportRepository.retryFailed`). The update
+requires all of the following:
+- status `failed`;
+- the file was stored completely (`storage_key IS NOT NULL`);
+- the file has not been purged (`file_purged_at IS NULL`);
+- `retry_count < PROCESSING_MAX_MANUAL_RETRIES`.
+
+- **Resumes, does not restart.** Counters, `last_line_committed`, accepted transactions and
+  rejections stay. The next claim reads from the checkpoint, and the unique constraint plus
+  the checkpoint guard make double counting impossible, exactly as after a crash.
+- **Fresh but bounded attempt budget.** `attempt_count` keeps increasing, so
+  `import_attempts` history is never rewritten. The retry sets
+  `attempt_base = attempt_count`, and the automatic budget applies to
+  `attempt_count - attempt_base`. Manual retries are capped separately, so a client cannot
+  create unbounded work.
+- **Failed uploads are excluded.** A failed upload has no file. The client re-uploads with
+  the same `Idempotency-Key`, which re-opens the row (already supported).
+- **Idempotent.** A second retry while the import is re-queued returns its current state.
+  Concurrent retries apply once (tested in `JooqRetryAndRetentionIT`).
+- **Summaries stay correct.** The failed import's summary was final and materialised. A
+  stored or cached summary is now used only if its totals equal the import's `processed`
+  counter, and `saveFinal` upserts. So the pre-retry summary is recomputed rather than
+  served once the import finishes again, even if a reader raced the retry.
+- **Dispatch** is the normal path: the event is published best-effort, and the sweep
+  re-publishes `pending` rows if it is lost.
+
+### Dead-letter topic
+
+A record the worker cannot use at all goes to `imports.requested.DLT` (same partition as
+the original) through Spring Kafka's `DeadLetterPublishingRecoverer`:
+- bytes that are not an `ImportRequestedEvent`, stored as the original bytes;
+- an event without an import id, stored as the re-serialised parsed event.
+
+Each record carries the exception class, message, stack trace and the original
+topic/partition/offset as headers. Such records are never retried, because they cannot
+succeed. The recovered offset is committed so the partition keeps moving.
+
+The DLT is for inspection, not replay. The database is the source of truth, and a real
+`pending` import is re-published by the sweep whatever happened to its event.
+
+### Progress streaming (server-sent events)
+
+`GET /v1/imports/{id}/events` streams the same body as `GET /v1/imports/{id}`. It polls the
+database, one read per watched import per `EVENTS_POLL_INTERVAL`, shared by every client
+watching that import. There is no push from the worker. The API and the worker are
+separate processes, and the committed counters are the only progress that is guaranteed to
+be true. A push channel would need a broker fan-out and could show batches that were later
+rolled back. Polling also bounds database load by the number of *distinct* imports being
+watched, not by the number of clients.
+
+The limits:
+- an event is sent only when something changed, with a comment heartbeat every 15 s;
+- `EVENTS_MAX_CONNECTIONS` streams per instance, after which clients get 429 with `Retry-After`;
+- streams close at a terminal status, after `EVENTS_TIMEOUT` (the client reconnects), and as
+  soon as shutdown starts, so open streams never hold up the HTTP drain.
+
+Caddy's compression is disabled for this path, because a compressing encoder would buffer
+events.
+
+### Per-provider rate limits
+
+When `UPLOAD_PROVIDER_RATE_LIMIT > 0`, `CreateImportUseCase` asks the `UploadRateLimiter`
+port before taking an upload slot or reserving a row. The Redis adapter keeps a
+fixed-window counter per provider, `rl:upload:<provider>:<window>`. One Lua script does
+`INCR` and sets the expiry on first use, so a counter can never be left without a TTL.
+
+Over the limit, the request gets 429 `PROVIDER_RATE_LIMITED` with `Retry-After` set to the
+seconds left in the window. Fixed windows can admit up to twice the limit across a window
+boundary. That is accepted for fairness between providers, and it keeps the check to one
+round trip.
+
+The limiter fails open, consistent with ADR-007. When Redis is down, uploads are admitted
+and the per-instance concurrency and size limits still apply.
+
+This limit and `UPLOAD_MAX_CONCURRENT` answer different questions:
+- the rate limit decides whether this provider is getting too much of the service, across
+  all instances;
+- `UPLOAD_MAX_CONCURRENT` decides whether this instance can stream another body right now.
+
+### Authentication (opt-in)
+
+With `API_KEYS_ENABLED=true`, `ApiKeyAuthenticationFilter` protects `/v1/**`. It runs right
+after the request-id filter, so a rejection still carries a request id.
+- **Keys and hashes.** Clients send `Authorization: Bearer <key>` or `X-API-Key`. The server
+  knows only SHA-256 hashes, each mapped to a provider id. A leaked config leaks no usable
+  keys, and the config is validated at startup.
+- **Provider.** The key's provider becomes the import's provider. An `X-Provider-Id` that
+  contradicts it gets 403.
+- **Ownership.** Every read and action checks it. Another provider's import answers 404, not
+  403, so ids cannot be probed for existence.
+- **Open endpoints.** Probes, `/metrics` and the API docs stay open. They carry no import
+  data, and probes and scrapers do not send credentials.
+
+It is off by default so that the public evaluation deployment stays callable. The use cases
+did not change: they already took the provider as a parameter, which was the extension
+point. JWT/OIDC would replace the key lookup in the same filter.
+
+### Data retention
+
+With `RETENTION_ENABLED=true`, each worker runs `PurgeExpiredUploadsUseCase` every
+`RETENTION_INTERVAL`. Each run takes at most `RETENTION_BATCH_SIZE` imports, oldest first,
+from imports that have been terminal for longer than `RETENTION_UPLOADED_FILES_AFTER` and
+still have their file. A partial index (`imports_retention_idx`) keeps that scan small.
+
+Only the uploaded file is deleted. The import, its counters, transactions, rejections and
+summary are the reconciliation result and stay queryable.
+
+Per import the order is mark, then delete:
+- `markFilePurged` is conditional on a terminal status and `file_purged_at IS NULL`, so it is
+  mutually exclusive with a retry (tested by racing the two 20 times);
+- with several workers, each import is purged exactly once;
+- a crash between the mark and the delete leaves an orphaned file whose row already says
+  purged. Nothing reads it; the key is logged for cleanup.
+
+Rows are not deleted. That would change the meaning of a finished import's totals, and the
+rows are small compared with the files.
+
+### Tracing (OpenTelemetry)
+
+Micrometer Observation is bridged to OpenTelemetry. It is always on in-process, so
+`traceId` and `spanId` appear in every JSON log line. Spans are exported over OTLP only
+when `MANAGEMENT_OTLP_TRACING_ENDPOINT` is set (`docker-compose.tracing.yml` adds Jaeger).
+
+One upload produces one trace:
+- `http post /v1/imports` → `imports.requested send`;
+- W3C headers on the Kafka record → `imports.requested receive` in the worker;
+- one `import batch write` span per batch.
+
+The batch writer runs on a thread the use case creates, so the trace is carried there by an
+injected `ThreadFactory` that captures the context (Micrometer context-propagation) on the
+claiming thread. The batch spans come from an `ObservedBatchWriter` decorator. Neither
+touches the use case's code.
+
+The import id and batch number are span attributes only, never metric tags. This was
+verified end to end in Jaeger: the batch-write spans are children of the consumer span,
+which is a child of the producer span, which is a child of the HTTP request.
+
+### Kubernetes
+
+`deploy/k8s` (kustomize) runs the API and worker as separate Deployments:
+- startup, liveness and readiness probes on the existing endpoints;
+- a `preStop` delay and a 60 s termination grace covering `SHUTDOWN_GRACE_PERIOD`;
+- the scoring pool sized explicitly to the worker's CPU request;
+- non-root, read-only root filesystem;
+- a `ReadWriteMany` volume for uploads, which is the limit of the local-storage adapter
+  (ADR-004).
+
+Postgres, Kafka and Redis are expected as managed services or operators. The manifests pass
+`kubeconform -strict` for Kubernetes 1.30.
+
