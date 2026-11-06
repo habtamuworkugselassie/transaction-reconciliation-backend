@@ -1,0 +1,24 @@
+# Kubernetes manifests for the API and worker roles.
+#
+#   kubectl apply -k deploy/k8s
+#
+# PostgreSQL, Kafka and Redis are NOT deployed here: in a cluster they are managed
+# services or operators (CloudNativePG, Strimzi, ...). Point the ConfigMap at them and
+# create the Secret first (see deploy/k8s/README.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: reconciliation
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: transaction-reconciliation
+    includeSelectors: false
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - uploads-pvc.yaml
+  - api.yaml
+  - worker.yaml
+images:
+  - name: transaction-reconciliation-service
+    newName: habtamuwgs/transaction-reconciliation-service
+    newTag: latest

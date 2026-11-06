@@ -1,0 +1,26 @@
+# Non-secret configuration shared by both roles. Every key is an environment variable
+# documented in README.md -> Configuration. Credentials live in the Secret
+# "reconciliation-db" (see README.md in this directory), never here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reconciliation-config
+data:
+  SPRING_PROFILES_ACTIVE: json
+  DATABASE_URL: jdbc:postgresql://postgres.reconciliation.svc:5432/reconciliation
+  KAFKA_BOOTSTRAP_SERVERS: kafka.reconciliation.svc:9092
+  REDIS_HOST: redis.reconciliation.svc
+  STORAGE_ROOT: /data/uploads
+  UPLOAD_MAX_CONCURRENT: "4"
+  UPLOAD_MAX_FILE_SIZE_BYTES: "209715200"
+  PROCESSING_BATCH_SIZE: "1000"
+  PROCESSING_MAX_IN_FLIGHT_BATCHES: "2"
+  # Must exceed the number of worker replicas x PROCESSING_MAX_CONCURRENT_IMPORTS,
+  # or extra consumers sit idle.
+  KAFKA_IMPORTS_PARTITIONS: "8"
+  SHUTDOWN_GRACE_PERIOD: 30s
+  # Optional features, off by default:
+  #   RETENTION_ENABLED: "true"
+  #   UPLOAD_PROVIDER_RATE_LIMIT: "60"
+  #   API_KEYS_ENABLED: "true"            (API_KEYS goes in a Secret)
+  #   MANAGEMENT_OTLP_TRACING_ENDPOINT: http://otel-collector.observability.svc:4318/v1/traces

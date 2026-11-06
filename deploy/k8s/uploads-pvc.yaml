@@ -1,0 +1,12 @@
+# Uploaded files are written by the API and read by the workers, so the volume must be
+# ReadWriteMany (NFS, CephFS, EFS, Filestore, ...). This is the limit of the local-storage
+# adapter (ADR-004); an object-storage adapter behind the FileStorage port removes it.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: reconciliation-uploads
+spec:
+  accessModes: [ReadWriteMany]
+  resources:
+    requests:
+      storage: 20Gi
