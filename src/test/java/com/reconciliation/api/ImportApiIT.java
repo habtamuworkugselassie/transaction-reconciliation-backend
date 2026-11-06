@@ -445,8 +445,7 @@ class ImportApiIT {
                 .contains("http_server_requests_seconds_count")
                 .contains("import_queue_depth")
                 .contains("upload_slots_capacity")
-                // "imports.created": the Prometheus client drops the reserved "_created" suffix
-                .contains("imports_total")
+                .contains("imports_accepted_total")
                 .contains("imports_replayed_total")
                 .contains("application=\"transaction-reconciliation-service\"");
     }

@@ -27,7 +27,7 @@ public final class MicrometerMetricsRecorder implements MetricsRecorder {
 
     public MicrometerMetricsRecorder(MeterRegistry registry) {
         this.registry = registry;
-        this.importsCreated = Counter.builder("imports.created").description("Imports accepted for processing").register(registry);
+        this.importsCreated = Counter.builder("imports.accepted").description("Imports accepted for processing").register(registry);
         this.importsReplayed = Counter.builder("imports.replayed").description("Create requests answered from an existing idempotency key").register(registry);
         this.uploadBytes = DistributionSummary.builder("import.upload.bytes").baseUnit("bytes").description("Size of accepted uploads").register(registry);
         this.recordsParsed = Counter.builder("import.records.parsed").description("Lines parsed (before persistence)").register(registry);

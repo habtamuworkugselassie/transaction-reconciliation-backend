@@ -7,6 +7,7 @@ import com.reconciliation.application.port.UploadLimiter;
 import com.reconciliation.infrastructure.health.StorageHealthIndicator;
 import com.reconciliation.infrastructure.health.WorkerHealthIndicator;
 import com.reconciliation.infrastructure.metrics.MicrometerMetricsRecorder;
+import com.reconciliation.infrastructure.metrics.ProcessMemoryReader;
 import com.reconciliation.infrastructure.risk.WorkerPoolRiskScorer;
 import com.reconciliation.infrastructure.worker.ImportWorker;
 import io.micrometer.core.instrument.Gauge;
@@ -59,6 +60,22 @@ public class ObservabilityConfig {
                 .description("Concurrent upload permits currently free").register(registry);
         Gauge.builder("upload.slots.capacity", uploads, UploadLimiter::capacity).register(registry);
         return gauges;
+    }
+
+    /**
+     * Process RSS ({@code process_memory_rss_bytes}). Registered only where {@code /proc}
+     * exists (Linux, so every container); JVM memory metrics do not include native memory.
+     */
+    @Bean
+    ProcessMemoryReader processMemoryReader(MeterRegistry registry) {
+        ProcessMemoryReader reader = new ProcessMemoryReader();
+        if (reader.available()) {
+            Gauge.builder("process.memory.rss", reader, r -> r.residentBytes().orElse(-1))
+                    .baseUnit("bytes")
+                    .description("Resident set size of the process (VmRSS), including native memory")
+                    .register(registry);
+        }
+        return reader;
     }
 
     public record WorkerGauges(ImportWorker worker, WorkerPoolRiskScorer scorer) {}
