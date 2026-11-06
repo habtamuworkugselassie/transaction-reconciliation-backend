@@ -5,7 +5,9 @@
 HTTP on port 9001 because the deployment has no DNS name and ports 80/443 are used by
 another service on the droplet, see `deploy/README.md` §1).
 Swagger UI: http://165.245.247.93:9001/swagger-ui.html · Readiness: http://165.245.247.93:9001/health/ready ·
-Metrics: http://165.245.247.93:9001/metrics. Runbook: `deploy/README.md`.
+Metrics: http://165.245.247.93:9001/metrics. 
+Open Telemetry Trace (jaeger): http://165.245.247.93:16686
+Runbook: `deploy/README.md`.
 
 ## Summary
 
