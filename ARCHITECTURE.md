@@ -2,31 +2,7 @@
 
 ## Components
 
-```mermaid
-flowchart LR
-    Client -->|multipart stream| API
-    subgraph API["API instance (PROCESSING_ENABLED=false)"]
-        Ctl[ImportController] --> Create[CreateImportUseCase]
-        Ctl --> Read[Get / Summary / Rejections / Cancel use cases]
-    end
-    Create -->|stream, hash, sniff| Storage[(Upload storage)]
-    Create -->|reserve key, mark pending| PG[(PostgreSQL)]
-    Create -->|ImportRequested| Kafka[(Kafka)]
-    Create -.->|idem key, summaries| Redis[(Redis)]
-    Read --> PG
-    Read -.-> Redis
-    subgraph Worker["Worker instance (PROCESSING_ENABLED=true)"]
-        Listener[ImportWorker<br/>Kafka listener, N threads] -->|claim lease| PG
-        Listener --> Proc[ProcessImportUseCase]
-        Proc --> Reader[NdjsonLineReader<br/>bounded line buffer]
-        Proc --> Val[TransactionValidator<br/>normalise]
-        Proc --> Pool[WorkerPoolRiskScorer<br/>CPU threads = cores]
-        Proc --> Writer[JooqBatchWriter<br/>1 tx per batch]
-    end
-    Kafka --> Listener
-    Storage --> Reader
-    Writer --> PG
-```
+![Components](docs/images/components.png)
 
 ### Module boundaries and dependency direction
 
@@ -105,39 +81,7 @@ conditional `UPDATE ... WHERE status = ...` in every repository method.
 
 ## Processing workflow
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant A as API
-    participant S as Storage
-    participant P as Postgres
-    participant K as Kafka
-    participant W as Worker
-    participant R as Scoring pool
-
-    C->>A: POST /v1/imports (Idempotency-Key)
-    A->>P: INSERT imports ON CONFLICT (key) DO NOTHING
-    alt key already used
-        A-->>C: 202 existing import (body not read)
-    else new
-        A->>S: stream body (sniff, count, hash, cap)
-        A->>P: file metadata; uploading -> pending
-        A->>K: ImportRequested{importId}
-        A-->>C: 202 {id, status: pending}
-    end
-    K->>W: ImportRequested
-    W->>P: UPDATE ... SET lease WHERE claimable (SKIP LOCKED)
-    loop every batch of 1000 lines
-        W->>S: read lines (resume after checkpoint)
-        W->>W: parse, validate, normalise
-        W->>R: score batch (bounded queue)
-        R-->>W: scored
-        W->>P: BEGIN; lock import row; INSERT tx ON CONFLICT DO NOTHING RETURNING;<br/>INSERT rejections; UPDATE counters + checkpoint; COMMIT
-        W->>P: cancel_requested? (between batches)
-    end
-    W->>P: completed | cancelled | failed | pending (released)
-    W->>K: ack (or nack with delay when released)
-```
+![Processing workflow](docs/images/processing-sequence.png)
 
 ### Step by step
 
