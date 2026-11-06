@@ -22,6 +22,8 @@ public final class RecordingMetrics implements MetricsRecorder {
     @Override public void retryAttempt(String operation, int attempt) { events.add("retryAttempt:" + operation + ":" + attempt); }
     @Override public void retryExhausted(String operation) { events.add("retryExhausted:" + operation); }
 
+    @Override public void importRetried() { events.add("importRetried"); }
+
     public long count(String prefix) {
         synchronized (events) {
             return events.stream().filter(e -> e.startsWith(prefix)).count();

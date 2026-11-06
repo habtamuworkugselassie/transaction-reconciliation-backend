@@ -94,6 +94,16 @@ public interface ImportRepository {
     /** processing -> pending, releasing the lease so another attempt can run (owner only). */
     boolean release(UUID id, String workerId, Instant now);
 
+    /**
+     * failed -> pending for a client-requested retry, keeping counters and the checkpoint
+     * so processing resumes where it stopped. Applies only if the file was stored completely
+     * ({@code storage_key} set), has not been purged by retention, and fewer than
+     * {@code maxRetries} retries have been made. Increments {@code retry_count} and moves
+     * {@code attempt_base} to the current {@code attempt_count}, which gives the import a
+     * fresh automatic-attempt budget. Returns the re-queued job, or empty if not applicable.
+     */
+    Optional<ImportJob> retryFailed(UUID id, int maxRetries, Instant now);
+
     long recordAttemptStart(UUID id, int attempt, String workerId, Instant now);
 
     void recordAttemptEnd(long attemptRowId, String outcome, String failureMessage, Instant now);

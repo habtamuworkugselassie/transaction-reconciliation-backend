@@ -60,8 +60,17 @@ class ImportStatusTest {
         assertThat(terminal.isTerminal()).isTrue();
         assertThat(terminal.isCancellable()).isFalse();
         for (ImportStatus target : ImportStatus.values()) {
-            assertThat(terminal.canTransitionTo(target)).as(terminal + " -> " + target).isFalse();
+            boolean manualRetry = terminal == FAILED && target == PENDING;
+            assertThat(terminal.canTransitionTo(target)).as(terminal + " -> " + target).isEqualTo(manualRetry);
         }
+    }
+
+    @Test
+    void onlyAFailedImportCanBeRequeuedAndOnlyToPending() {
+        assertThat(FAILED.canTransitionTo(PENDING)).isTrue();
+        assertThat(FAILED.canTransitionTo(PROCESSING)).isFalse();
+        assertThat(COMPLETED.canTransitionTo(PENDING)).isFalse();
+        assertThat(CANCELLED.canTransitionTo(PENDING)).isFalse();
     }
 
     @ParameterizedTest

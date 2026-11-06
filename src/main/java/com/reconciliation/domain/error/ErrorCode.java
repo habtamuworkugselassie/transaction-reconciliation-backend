@@ -20,6 +20,7 @@ public enum ErrorCode {
     IMPORT_NOT_FOUND(404, ErrorCategory.BUSINESS_RULE, false),
     IDEMPOTENCY_KEY_CONFLICT(409, ErrorCategory.BUSINESS_RULE, false),
     IMPORT_NOT_CANCELLABLE(409, ErrorCategory.BUSINESS_RULE, false),
+    IMPORT_NOT_RETRYABLE(409, ErrorCategory.BUSINESS_RULE, false),
     IMPORT_STATE_CONFLICT(409, ErrorCategory.BUSINESS_RULE, false),
     TOO_MANY_CONCURRENT_UPLOADS(429, ErrorCategory.BUSINESS_RULE, false),
 

@@ -44,7 +44,7 @@ class GetImportSummaryUseCaseTest {
 
         @Override
         public void saveFinal(UUID importId, ImportSummary summary, Instant now) {
-            finals.putIfAbsent(importId, summary);
+            finals.put(importId, summary); // upsert, like the jOOQ adapter
         }
     }
 
@@ -128,6 +128,24 @@ class GetImportSummaryUseCaseTest {
         assertThat(summaries.computeCalls).as("computed once, then read from import_summaries").isEqualTo(1);
         assertThat(summaries.finals).containsKey(id);
         assertThat(cache.ttls.get(id)).isEqualTo(Duration.ofHours(1));
+    }
+
+    @Test
+    void finalSummaryFromBeforeAManualRetryIsRecomputedOnceTheImportFinishesAgain() {
+        // failed after 40 records: the final summary covers 40
+        seed(ImportStatus.FAILED, 40);
+        summaries.acceptedInDb = 40;
+        assertThat(useCase.execute(id).summary().totals().accepted()).isEqualTo(40);
+
+        // retried and completed with 100: both the cached and the stored summary say 40
+        seed(ImportStatus.COMPLETED, 100);
+        summaries.acceptedInDb = 100;
+        GetImportSummaryUseCase.Result after = useCase.execute(id);
+
+        assertThat(after.isFinal()).isTrue();
+        assertThat(after.summary().totals().accepted()).isEqualTo(100);
+        assertThat(summaries.finals.get(id).totals().accepted()).isEqualTo(100);
+        assertThat(cache.entries.get(id).totals().accepted()).isEqualTo(100);
     }
 
     @Test

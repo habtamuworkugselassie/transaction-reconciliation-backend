@@ -78,7 +78,8 @@ public final class InMemoryImportRepository implements ImportRepository {
         }
         ImportJob reopened = new ImportJob(j.id(), j.idempotencyKey(), j.providerId(), ImportStatus.UPLOADING,
                 j.originalFilename(), null, null, null, j.progress(), j.lastLineCommitted(), j.cancelRequested(),
-                j.attemptCount(), j.leaseOwner(), j.leaseExpiresAt(), null, null, now, now, j.startedAt(), null);
+                j.attemptCount(), j.leaseOwner(), j.leaseExpiresAt(), null, null, now, now, j.startedAt(), null,
+                j.retryCount(), j.attemptBase(), j.filePurgedAt());
         rows.put(id, reopened);
         return Optional.of(reopened);
     }
@@ -244,6 +245,21 @@ public final class InMemoryImportRepository implements ImportRepository {
         }
     }
 
+    @Override
+    public synchronized Optional<ImportJob> retryFailed(UUID id, int maxRetries, Instant now) {
+        ImportJob j = rows.get(id);
+        if (j == null || j.status() != ImportStatus.FAILED || j.storageKey() == null || j.filePurgedAt() != null
+                || j.retryCount() >= maxRetries) {
+            return Optional.empty();
+        }
+        ImportJob retried = new ImportJob(j.id(), j.idempotencyKey(), j.providerId(), ImportStatus.PENDING,
+                j.originalFilename(), j.storageKey(), j.fileSizeBytes(), j.contentSha256(), j.progress(),
+                j.lastLineCommitted(), false, j.attemptCount(), null, null, null, null, j.createdAt(), now,
+                j.startedAt(), null, j.retryCount() + 1, j.attemptCount(), null);
+        rows.put(id, retried);
+        return Optional.of(retried);
+    }
+
     // ---- used by InMemoryBatchWriter ---------------------------------------
 
     synchronized ImportJob advance(UUID id, long lastLine, int accepted, int rejected, int duplicates, Instant now) {
@@ -251,7 +267,8 @@ public final class InMemoryImportRepository implements ImportRepository {
         ImportJob updated = new ImportJob(j.id(), j.idempotencyKey(), j.providerId(), j.status(), j.originalFilename(),
                 j.storageKey(), j.fileSizeBytes(), j.contentSha256(), j.progress().plus(accepted, rejected, duplicates),
                 lastLine, j.cancelRequested(), j.attemptCount(), j.leaseOwner(), j.leaseExpiresAt(), j.failureReason(),
-                j.failureMessage(), j.createdAt(), now, j.startedAt(), j.completedAt());
+                j.failureMessage(), j.createdAt(), now, j.startedAt(), j.completedAt(), j.retryCount(), j.attemptBase(),
+                j.filePurgedAt());
         rows.put(id, updated);
         return updated;
     }
@@ -262,6 +279,7 @@ public final class InMemoryImportRepository implements ImportRepository {
                                   Instant updatedAt) {
         return new ImportJob(j.id(), j.idempotencyKey(), j.providerId(), status, j.originalFilename(), storageKey, size,
                 sha, j.progress(), j.lastLineCommitted(), cancelRequested, attemptCount, leaseOwner, leaseExpiresAt,
-                failureReason, failureMessage, j.createdAt(), updatedAt, startedAt, completedAt);
+                failureReason, failureMessage, j.createdAt(), updatedAt, startedAt, completedAt, j.retryCount(),
+                j.attemptBase(), j.filePurgedAt());
     }
 }

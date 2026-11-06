@@ -93,7 +93,11 @@ public class JooqSummaryRepository implements SummaryRepository {
                 .set(IMPORT_SUMMARIES.IMPORT_ID, importId)
                 .set(IMPORT_SUMMARIES.SUMMARY, JSON.valueOf(toJson(summary)))
                 .set(IMPORT_SUMMARIES.COMPUTED_AT, odt(now))
-                .onConflict(IMPORT_SUMMARIES.IMPORT_ID).doNothing()
+                // Upsert: a summary stored before a manual retry is replaced by the one computed
+                // after the import finishes again.
+                .onConflict(IMPORT_SUMMARIES.IMPORT_ID).doUpdate()
+                .set(IMPORT_SUMMARIES.SUMMARY, JSON.valueOf(toJson(summary)))
+                .set(IMPORT_SUMMARIES.COMPUTED_AT, odt(now))
                 .execute();
     }
 

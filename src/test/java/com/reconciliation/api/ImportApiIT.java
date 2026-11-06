@@ -450,6 +450,68 @@ class ImportApiIT {
                 .contains("application=\"transaction-reconciliation-service\"");
     }
 
+    // ---- manual retry ---------------------------------------------------------
+
+    @Test
+    void aFailedImportIsRetriedOverHttpAndResumesFromItsCheckpoint() throws Exception {
+        UUID id = idOf(upload("retry-1", Fixtures.validLines(50)));
+        AtomicInteger writes = new AtomicInteger();
+        BatchWriter failsOnTheThirdBatch = batch -> {
+            if (writes.incrementAndGet() == 3) {
+                throw new IllegalStateException("simulated permanent failure"); // not transient: no automatic retry
+            }
+            return batchWriter.write(batch);
+        };
+        assertThat(process(id, "worker-a", failsOnTheThirdBatch)).isEqualTo(ProcessingOutcome.FAILED);
+
+        JsonNode failed = getJson("/v1/imports/" + id);
+        assertThat(failed.get("status").asText()).isEqualTo("failed");
+        assertThat(failed.get("failureReason").asText()).isEqualTo("PROCESSING_FAILED");
+        assertThat(failed.at("/progress/processed").asLong()).isEqualTo(20);
+        // the failed import's summary is final (and materialised) at 20 records
+        assertThat(getJson("/v1/imports/" + id + "/summary").at("/totals/accepted").asLong()).isEqualTo(20);
+
+        ResponseEntity<String> retry = http.postForEntity("/v1/imports/" + id + "/retry", null, String.class);
+        assertThat(retry.getStatusCode().value()).isEqualTo(202);
+        assertThat(json.readTree(retry.getBody()).get("status").asText()).isEqualTo("pending");
+        assertThat(json.readTree(retry.getBody()).get("failureReason").isNull()).isTrue();
+        // idempotent while re-queued
+        ResponseEntity<String> again = http.postForEntity("/v1/imports/" + id + "/retry", null, String.class);
+        assertThat(again.getStatusCode().value()).isEqualTo(202);
+
+        ImportJob resumed = queue.claim(id, "worker-b").orElseThrow();
+        assertThat(resumed.lastLineCommitted()).isEqualTo(20);
+        assertThat(resumed.attemptsSinceRetry()).isEqualTo(1);
+        assertThat(useCase(batchWriter).execute(resumed, "worker-b", new CancellationToken()))
+                .isEqualTo(ProcessingOutcome.COMPLETED);
+
+        JsonNode done = getJson("/v1/imports/" + id);
+        assertThat(done.get("status").asText()).isEqualTo("completed");
+        assertThat(done.at("/progress/processed").asLong()).isEqualTo(50);
+        assertThat(done.at("/progress/accepted").asLong()).isEqualTo(50);
+        assertThat(done.at("/progress/duplicates").asLong()).isZero();
+        assertThat(transactionCount(id)).isEqualTo(50);
+        // the summary materialised at 20 is replaced, not served stale
+        JsonNode summary = getJson("/v1/imports/" + id + "/summary");
+        assertThat(summary.get("isFinal").asBoolean()).isTrue();
+        assertThat(summary.at("/totals/accepted").asLong()).isEqualTo(50);
+
+        assertError(http.postForEntity("/v1/imports/" + id + "/retry", null, String.class), 409, "IMPORT_NOT_RETRYABLE");
+        assertError(http.postForEntity("/v1/imports/" + UUID.randomUUID() + "/retry", null, String.class), 404,
+                "IMPORT_NOT_FOUND");
+    }
+
+    @Test
+    void aFailedUploadIsNotRetriedThroughTheRetryEndpoint() throws Exception {
+        assertError(upload("retry-empty", ""), 400, "IMPORT_FILE_EMPTY");
+        UUID id = PG.db().select(IMPORTS.ID).from(IMPORTS).fetchOne(IMPORTS.ID);
+
+        ResponseEntity<String> r = http.postForEntity("/v1/imports/" + id + "/retry", null, String.class);
+
+        assertError(r, 409, "IMPORT_NOT_RETRYABLE");
+        assertThat(json.readTree(r.getBody()).at("/error/message").asText()).contains("Idempotency-Key");
+    }
+
     // ---- crash and resume -----------------------------------------------------
 
     /**

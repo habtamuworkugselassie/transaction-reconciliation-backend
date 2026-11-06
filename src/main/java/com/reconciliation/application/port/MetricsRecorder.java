@@ -26,6 +26,9 @@ public interface MetricsRecorder {
 
     void retryExhausted(String operation);
 
+    /** A client re-queued a failed import (POST /v1/imports/{id}/retry). */
+    default void importRetried() { }
+
     /** No-op implementation for tests and for wiring before Micrometer is configured. */
     MetricsRecorder NOOP = new MetricsRecorder() {
         @Override public void importCreated(long bytes) { }

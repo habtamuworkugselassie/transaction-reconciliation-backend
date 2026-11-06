@@ -68,7 +68,9 @@ public record AppProperties(
             /** Processing attempts after which an import is marked failed. */
             @Min(1) @Max(20) @DefaultValue("3") int maxAttempts,
             /** How often the worker re-publishes pending imports nobody picked up and expired leases. */
-            @NotNull @DefaultValue("60s") Duration redispatchInterval
+            @NotNull @DefaultValue("60s") Duration redispatchInterval,
+            /** Client-requested retries (POST .../retry) allowed per import. */
+            @Min(0) @Max(20) @DefaultValue("3") int maxManualRetries
     ) {}
 
     /** CPU-bound risk scoring pool. */

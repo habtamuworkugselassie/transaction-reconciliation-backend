@@ -18,6 +18,7 @@ import com.reconciliation.application.usecase.CreateImportUseCase;
 import com.reconciliation.application.usecase.GetImportSummaryUseCase;
 import com.reconciliation.application.usecase.GetImportUseCase;
 import com.reconciliation.application.usecase.ListRejectionsUseCase;
+import com.reconciliation.application.usecase.RetryImportUseCase;
 import com.reconciliation.infrastructure.concurrency.SemaphoreUploadLimiter;
 import com.reconciliation.infrastructure.storage.LocalFileStorage;
 import com.reconciliation.infrastructure.time.RandomUuidGenerator;
@@ -74,6 +75,12 @@ public class ApplicationAssembly {
     }
 
     @Bean
+    RetryImportUseCase retryImportUseCase(ImportRepository imports, ImportJobQueue queue, SummaryCache cache,
+                                          MetricsRecorder metrics, Clock clock, AppProperties props) {
+        return new RetryImportUseCase(imports, queue, cache, metrics, clock, props.processing().maxManualRetries());
+    }
+
+    @Bean
     GetImportUseCase getImportUseCase(ImportRepository imports) {
         return new GetImportUseCase(imports);
     }
@@ -100,8 +107,8 @@ public class ApplicationAssembly {
     @Bean
     ImportController importController(CreateImportUseCase create, GetImportUseCase get, CancelImportUseCase cancel,
                                       GetImportSummaryUseCase summary, ListRejectionsUseCase rejections,
-                                      AppProperties props) {
-        return new ImportController(create, get, cancel, summary, rejections,
+                                      RetryImportUseCase retry, AppProperties props) {
+        return new ImportController(create, get, cancel, summary, rejections, retry,
                 props.upload().providerHeader(), props.upload().defaultProvider());
     }
 

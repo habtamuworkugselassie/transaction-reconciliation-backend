@@ -133,12 +133,15 @@ public class ProcessImportUseCase {
         // storage I/O, retryable AppExceptions). Programming errors, constraint violations,
         // validation and cancellation are never transient, so they fail the import at once.
         boolean programming = failure instanceof AppException app && app.category() == ErrorCategory.PROGRAMMING;
-        if (!programming && transientFailures.isTransient(failure) && job.attemptCount() < settings.maxAttempts()) {
+        // The budget counts attempts since the last manual retry (attempt_base), so a client
+        // retry of a failed import gets maxAttempts fresh attempts, and no more.
+        if (!programming && transientFailures.isTransient(failure) && job.attemptsSinceRetry() < settings.maxAttempts()) {
             log.warn("Transient failure on attempt {}/{}; releasing import for retry: {}",
-                    job.attemptCount(), settings.maxAttempts(), failure.toString());
+                    job.attemptsSinceRetry(), settings.maxAttempts(), failure.toString());
             return finish(job, workerId, ProcessingOutcome.RELEASED, failure.getMessage(), startedAt);
         }
-        log.error("Import processing failed permanently (attempt {}/{})", job.attemptCount(), settings.maxAttempts(), failure);
+        log.error("Import processing failed permanently (attempt {}/{})", job.attemptsSinceRetry(), settings.maxAttempts(),
+                failure);
         return finish(job, workerId, ProcessingOutcome.FAILED, safeMessage(failure), startedAt);
     }
 

@@ -134,6 +134,7 @@ app:
     stale-upload-timeout: ${UPLOAD_STALE_TIMEOUT:15m}
     max-attempts: ${PROCESSING_MAX_ATTEMPTS:3}
     redispatch-interval: ${PROCESSING_REDISPATCH_INTERVAL:60s}
+    max-manual-retries: ${PROCESSING_MAX_MANUAL_RETRIES:3}
   risk:
     worker-threads: ${RISK_WORKER_THREADS:0}
     queue-capacity: ${RISK_QUEUE_CAPACITY:4000}

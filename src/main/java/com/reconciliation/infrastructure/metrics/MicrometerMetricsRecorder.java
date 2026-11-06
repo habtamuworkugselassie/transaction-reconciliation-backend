@@ -82,4 +82,9 @@ public final class MicrometerMetricsRecorder implements MetricsRecorder {
     public void retryExhausted(String operation) {
         registry.counter("retries.exhausted", "operation", operation).increment();
     }
+
+    @Override
+    public void importRetried() {
+        registry.counter("imports.retried").increment();
+    }
 }

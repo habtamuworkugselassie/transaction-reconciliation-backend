@@ -44,7 +44,10 @@ public enum ImportStatus {
             case PROCESSING -> target == COMPLETED || target == FAILED || target == CANCELLING
                     || target == PENDING || target == CANCELLED;
             case CANCELLING -> target == CANCELLED || target == FAILED;
-            case COMPLETED, FAILED, CANCELLED -> false;
+            // A failed import whose file was stored can be re-queued by an explicit client retry
+            // (POST /v1/imports/{id}/retry). It is still terminal: nothing moves it automatically.
+            case FAILED -> target == PENDING;
+            case COMPLETED, CANCELLED -> false;
         };
     }
 

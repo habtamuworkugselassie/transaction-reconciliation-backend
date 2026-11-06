@@ -251,6 +251,29 @@ public class JooqImportRepository implements ImportRepository {
     }
 
     @Override
+    public Optional<ImportJob> retryFailed(UUID id, int maxRetries, Instant now) {
+        return db.update(IMPORTS)
+                .set(IMPORTS.STATUS, ImportStatus.PENDING.wireName())
+                .set(IMPORTS.RETRY_COUNT, IMPORTS.RETRY_COUNT.plus(1))
+                .set(IMPORTS.ATTEMPT_BASE, IMPORTS.ATTEMPT_COUNT)
+                .set(IMPORTS.CANCEL_REQUESTED, false)
+                .setNull(IMPORTS.FAILURE_REASON)
+                .setNull(IMPORTS.FAILURE_MESSAGE)
+                .setNull(IMPORTS.COMPLETED_AT)
+                .setNull(IMPORTS.LEASE_OWNER)
+                .setNull(IMPORTS.LEASE_EXPIRES_AT)
+                .set(IMPORTS.UPDATED_AT, odt(now))
+                .where(IMPORTS.ID.eq(id))
+                .and(IMPORTS.STATUS.eq(ImportStatus.FAILED.wireName()))
+                .and(IMPORTS.STORAGE_KEY.isNotNull())
+                .and(IMPORTS.FILE_PURGED_AT.isNull())
+                .and(IMPORTS.RETRY_COUNT.lt(maxRetries))
+                .returning()
+                .fetchOptional()
+                .map(JooqImportRepository::map);
+    }
+
+    @Override
     public long recordAttemptStart(UUID id, int attempt, String workerId, Instant now) {
         return db.insertInto(IMPORT_ATTEMPTS)
                 .set(IMPORT_ATTEMPTS.IMPORT_ID, id)
@@ -298,6 +321,9 @@ public class JooqImportRepository implements ImportRepository {
                 instant(r.getCreatedAt()),
                 instant(r.getUpdatedAt()),
                 instant(r.getStartedAt()),
-                instant(r.getCompletedAt()));
+                instant(r.getCompletedAt()),
+                r.getRetryCount(),
+                r.getAttemptBase(),
+                instant(r.getFilePurgedAt()));
     }
 }

@@ -45,9 +45,11 @@ public class GetImportSummaryUseCase {
     public Result execute(UUID id) {
         ImportJob job = imports.findById(id).orElseThrow(() -> AppException.notFound("Import", id));
         boolean isFinal = job.status().isTerminal();
+        // A cached or stored summary is used only if it covers exactly the records the import
+        // has processed. That is always true for an import that finished once, and it is what
+        // keeps a summary from before a manual retry from being served after it.
         ImportSummary cached = cache.get(id).orElse(null);
-        if (cached != null && (isFinal || cached.totals().accepted() + cached.totals().rejected()
-                + cached.totals().duplicates() == job.progress().processed())) {
+        if (cached != null && matches(cached, job)) {
             return new Result(job, cached, isFinal);
         }
         if (!isFinal) {
@@ -55,12 +57,17 @@ public class GetImportSummaryUseCase {
             cache.put(id, live, liveTtl);
             return new Result(job, live, false);
         }
-        ImportSummary stored = summaries.findFinal(id).orElse(null);
+        ImportSummary stored = summaries.findFinal(id).filter(s -> matches(s, job)).orElse(null);
         if (stored == null) {
             stored = summaries.compute(id);
-            summaries.saveFinal(id, stored, clock.now()); // idempotent; a race writes the same value twice
+            summaries.saveFinal(id, stored, clock.now()); // upsert; concurrent readers write the same value
         }
         cache.put(id, stored, finalTtl);
         return new Result(job, stored, true);
+    }
+
+    private static boolean matches(ImportSummary summary, ImportJob job) {
+        return summary.totals().accepted() + summary.totals().rejected() + summary.totals().duplicates()
+                == job.progress().processed();
     }
 }

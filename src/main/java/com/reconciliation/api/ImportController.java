@@ -10,6 +10,7 @@ import com.reconciliation.application.usecase.CreateImportUseCase;
 import com.reconciliation.application.usecase.GetImportSummaryUseCase;
 import com.reconciliation.application.usecase.GetImportUseCase;
 import com.reconciliation.application.usecase.ListRejectionsUseCase;
+import com.reconciliation.application.usecase.RetryImportUseCase;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.enums.ParameterIn;
@@ -43,17 +44,20 @@ public class ImportController {
     private final CancelImportUseCase cancelImport;
     private final GetImportSummaryUseCase getSummary;
     private final ListRejectionsUseCase listRejections;
+    private final RetryImportUseCase retryImport;
     private final String providerHeader;
     private final String defaultProvider;
 
     public ImportController(CreateImportUseCase createImport, GetImportUseCase getImport,
                             CancelImportUseCase cancelImport, GetImportSummaryUseCase getSummary,
-                            ListRejectionsUseCase listRejections, String providerHeader, String defaultProvider) {
+                            ListRejectionsUseCase listRejections, RetryImportUseCase retryImport,
+                            String providerHeader, String defaultProvider) {
         this.createImport = createImport;
         this.getImport = getImport;
         this.cancelImport = cancelImport;
         this.getSummary = getSummary;
         this.listRejections = listRejections;
+        this.retryImport = retryImport;
         this.providerHeader = providerHeader;
         this.defaultProvider = defaultProvider;
     }
@@ -121,6 +125,22 @@ public class ImportController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     public ResponseEntity<ImportStatusResponse> cancel(@PathVariable UUID id) {
         return ResponseEntity.accepted().body(ImportStatusResponse.from(cancelImport.execute(id)));
+    }
+
+    @PostMapping("/{id}/retry")
+    @Operation(summary = "Retry a failed import",
+            description = "Re-queues a failed import. Processing resumes from the last committed checkpoint: records "
+                    + "already accepted, rejected or counted as duplicates are kept and never counted twice. Only "
+                    + "imports whose file was stored completely can be retried (a failed upload is retried by "
+                    + "uploading again with the same Idempotency-Key), and the number of retries per import is "
+                    + "limited. Idempotent: retrying an import that is already re-queued returns its current state.")
+    @ApiResponse(responseCode = "202", description = "Import re-queued (or already re-queued)")
+    @ApiResponse(responseCode = "404", description = "Unknown import",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    @ApiResponse(responseCode = "409", description = "Not failed, upload never completed, file purged, or retry limit reached",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    public ResponseEntity<ImportStatusResponse> retry(@PathVariable UUID id) {
+        return ResponseEntity.accepted().body(ImportStatusResponse.from(retryImport.execute(id)));
     }
 
     @GetMapping("/{id}/summary")
