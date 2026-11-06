@@ -27,6 +27,7 @@ public record AppProperties(
         @Valid @NotNull Shutdown shutdown,
         @Valid @NotNull Kafka kafka,
         @Valid @NotNull Cache cache,
+        @Valid @NotNull Security security,
         @Valid @NotNull Events events
 ) {
 
@@ -125,6 +126,20 @@ public record AppProperties(
     public record Shutdown(
             /** Upper bound on waiting for in-flight batches before forcing exit. */
             @NotNull @DefaultValue("30s") Duration gracePeriod
+    ) {}
+
+    /**
+     * Optional API-key authentication. When enabled, every /v1 request needs
+     * {@code Authorization: Bearer <key>} (or {@code X-API-Key}); the key decides the
+     * provider, and an import is visible only to the provider that created it.
+     */
+    public record Security(
+            @DefaultValue("false") boolean apiKeysEnabled,
+            /**
+             * Comma-separated {@code <sha256-hex-of-key>:<providerId>} pairs. Only hashes are
+             * configured, never the keys themselves.
+             */
+            @DefaultValue("") String apiKeys
     ) {}
 
     /** Server-sent progress events (GET /v1/imports/{id}/events). */

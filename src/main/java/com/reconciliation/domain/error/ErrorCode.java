@@ -28,6 +28,10 @@ public enum ErrorCode {
     /** All progress-stream slots on this instance are in use. */
     TOO_MANY_EVENT_STREAMS(429, ErrorCategory.BUSINESS_RULE, false),
 
+    // --- authentication (only when API keys are enabled) ---
+    UNAUTHENTICATED(401, ErrorCategory.REQUEST_VALIDATION, false),
+    PROVIDER_MISMATCH(403, ErrorCategory.REQUEST_VALIDATION, false),
+
     // --- infrastructure ---
     UPLOAD_INTERRUPTED(400, ErrorCategory.INFRASTRUCTURE, false),
     STORAGE_FAILURE(503, ErrorCategory.INFRASTRUCTURE, true),

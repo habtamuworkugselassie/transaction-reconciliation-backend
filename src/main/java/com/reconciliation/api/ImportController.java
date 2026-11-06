@@ -11,7 +11,10 @@ import com.reconciliation.application.usecase.GetImportSummaryUseCase;
 import com.reconciliation.application.usecase.GetImportUseCase;
 import com.reconciliation.application.usecase.ListRejectionsUseCase;
 import com.reconciliation.application.usecase.RetryImportUseCase;
+import com.reconciliation.domain.error.AppException;
+import com.reconciliation.domain.error.ErrorCode;
 import com.reconciliation.domain.model.ImportJob;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -39,6 +42,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping(path = "/v1/imports", produces = MediaType.APPLICATION_JSON_VALUE)
 @Tag(name = "Imports", description = "Upload NDJSON transaction files and track their processing")
+@SecurityRequirement(name = "apiKey")
 public class ImportController {
 
     private final CreateImportUseCase createImport;
@@ -96,11 +100,11 @@ public class ImportController {
     public ResponseEntity<ImportCreatedResponse> create(
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             HttpServletRequest request) throws IOException {
-        String provider = request.getHeader(providerHeader);
+        String provider = resolveProvider(request);
         MultipartUploadStreamer.FilePart part = MultipartUploadStreamer.firstFilePart(request);
         CreateImportUseCase.Result result = createImport.execute(new CreateImportUseCase.Command(
                 idempotencyKey,
-                provider == null || provider.isBlank() ? defaultProvider : provider.trim(),
+                provider,
                 part.filename(),
                 part.body()));
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(ImportCreatedResponse.from(result.job()));
@@ -111,10 +115,10 @@ public class ImportController {
     @ApiResponse(responseCode = "200", description = "Current persisted state")
     @ApiResponse(responseCode = "404", description = "Unknown import",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
-    public ImportStatusResponse get(@PathVariable UUID id) {
+    public ImportStatusResponse get(@PathVariable UUID id, HttpServletRequest request) {
         MDC.put("importId", id.toString());
         try {
-            return ImportStatusResponse.from(getImport.execute(id));
+            return ImportStatusResponse.from(authorizedImport(id, request));
         } finally {
             MDC.remove("importId");
         }
@@ -127,7 +131,8 @@ public class ImportController {
     @ApiResponse(responseCode = "202", description = "Cancellation requested or already in effect")
     @ApiResponse(responseCode = "409", description = "Import already finished",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
-    public ResponseEntity<ImportStatusResponse> cancel(@PathVariable UUID id) {
+    public ResponseEntity<ImportStatusResponse> cancel(@PathVariable UUID id, HttpServletRequest request) {
+        authorize(id, request);
         return ResponseEntity.accepted().body(ImportStatusResponse.from(cancelImport.execute(id)));
     }
 
@@ -143,7 +148,8 @@ public class ImportController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     @ApiResponse(responseCode = "409", description = "Not failed, upload never completed, file purged, or retry limit reached",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
-    public ResponseEntity<ImportStatusResponse> retry(@PathVariable UUID id) {
+    public ResponseEntity<ImportStatusResponse> retry(@PathVariable UUID id, HttpServletRequest request) {
+        authorize(id, request);
         return ResponseEntity.accepted().body(ImportStatusResponse.from(retryImport.execute(id)));
     }
 
@@ -158,8 +164,8 @@ public class ImportController {
             content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ErrorResponse.class)))
     @ApiResponse(responseCode = "429", description = "Too many open streams on this instance",
             content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ErrorResponse.class)))
-    public ResponseEntity<SseEmitter> events(@PathVariable UUID id) {
-        ImportJob job = getImport.execute(id);
+    public ResponseEntity<SseEmitter> events(@PathVariable UUID id, HttpServletRequest request) {
+        ImportJob job = authorizedImport(id, request);
         return ResponseEntity.ok()
                 .header("Cache-Control", "no-cache")
                 .header("X-Accel-Buffering", "no") // tell buffering proxies to pass events through immediately
@@ -169,7 +175,8 @@ public class ImportController {
     @GetMapping("/{id}/summary")
     @Operation(summary = "Get reconciliation summary",
             description = "Derived from persisted results. Live while processing; cached once the import is terminal.")
-    public ImportSummaryResponse summary(@PathVariable UUID id) {
+    public ImportSummaryResponse summary(@PathVariable UUID id, HttpServletRequest request) {
+        authorize(id, request);
         GetImportSummaryUseCase.Result r = getSummary.execute(id);
         return ImportSummaryResponse.from(r.job(), r.summary(), r.isFinal());
     }
@@ -180,9 +187,56 @@ public class ImportController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     public RejectionsPageResponse rejections(@PathVariable UUID id,
                                              @RequestParam(required = false) @Parameter(example = "50") Integer limit,
-                                             @RequestParam(required = false) String cursor) {
+                                             @RequestParam(required = false) String cursor,
+                                             HttpServletRequest request) {
+        authorize(id, request);
         ListRejectionsUseCase.Page page = listRejections.execute(id, limit, cursor);
         return RejectionsPageResponse.from(page.items(), page.nextCursor());
+    }
+
+    // ---- provider identity ----------------------------------------------------
+
+    /**
+     * The provider of a new import. With API keys enabled it is the key's provider, and an
+     * {@code X-Provider-Id} that disagrees is refused; without, it is the header (or the default).
+     */
+    private String resolveProvider(HttpServletRequest request) {
+        String header = request.getHeader(providerHeader);
+        String claimed = header == null || header.isBlank() ? null : header.trim();
+        String authenticated = authenticatedProvider(request);
+        if (authenticated == null) {
+            return claimed == null ? defaultProvider : claimed;
+        }
+        if (claimed != null && !claimed.equals(authenticated)) {
+            throw new AppException(ErrorCode.PROVIDER_MISMATCH,
+                    "The " + providerHeader + " header does not match the provider of the API key");
+        }
+        return authenticated;
+    }
+
+    /** Without API keys every import is visible (the original contract); with them, only the owner's. */
+    private void authorize(UUID id, HttpServletRequest request) {
+        if (authenticatedProvider(request) != null) {
+            authorizedImport(id, request);
+        }
+    }
+
+    /**
+     * Loads the import and checks ownership. Another provider's import is reported as not
+     * found rather than forbidden, so ids cannot be probed for existence.
+     */
+    private ImportJob authorizedImport(UUID id, HttpServletRequest request) {
+        ImportJob job = getImport.execute(id);
+        String authenticated = authenticatedProvider(request);
+        if (authenticated != null && !authenticated.equals(job.providerId())) {
+            throw AppException.notFound("Import", id);
+        }
+        return job;
+    }
+
+    private static String authenticatedProvider(HttpServletRequest request) {
+        Object provider = request.getAttribute(ApiKeyAuthenticationFilter.PROVIDER_ATTRIBUTE);
+        return provider == null ? null : provider.toString();
     }
 
     /** Only used to describe the multipart body in OpenAPI. */

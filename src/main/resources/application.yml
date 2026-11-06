@@ -160,6 +160,9 @@ app:
     summary-live-ttl: ${CACHE_SUMMARY_LIVE_TTL:2s}
     summary-final-ttl: ${CACHE_SUMMARY_FINAL_TTL:1h}
     idempotency-ttl: ${CACHE_IDEMPOTENCY_TTL:24h}
+  security:
+    api-keys-enabled: ${API_KEYS_ENABLED:false}
+    api-keys: ${API_KEYS:}
   events:
     max-connections: ${EVENTS_MAX_CONNECTIONS:100}
     poll-interval: ${EVENTS_POLL_INTERVAL:1s}

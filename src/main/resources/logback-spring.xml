@@ -20,6 +20,7 @@
             <includeMdcKeyName>attempt</includeMdcKeyName>
             <includeMdcKeyName>errorCode</includeMdcKeyName>
             <includeMdcKeyName>shutdown</includeMdcKeyName>
+            <includeMdcKeyName>providerId</includeMdcKeyName>
             <shortenedLoggerNameLength>36</shortenedLoggerNameLength>
             <!-- Stack traces are shortened; request payloads are never logged. -->
             <throwableConverter class="net.logstash.logback.stacktrace.ShortenedThrowableConverter">

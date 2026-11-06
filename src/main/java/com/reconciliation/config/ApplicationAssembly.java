@@ -1,5 +1,7 @@
 package com.reconciliation.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.reconciliation.api.ApiKeyAuthenticationFilter;
 import com.reconciliation.api.ImportController;
 import com.reconciliation.api.ImportProgressStreamer;
 import com.reconciliation.api.RequestIdFilter;
@@ -25,6 +27,10 @@ import com.reconciliation.infrastructure.concurrency.SemaphoreUploadLimiter;
 import com.reconciliation.infrastructure.storage.LocalFileStorage;
 import com.reconciliation.infrastructure.time.RandomUuidGenerator;
 import com.reconciliation.infrastructure.time.SystemClock;
+import io.swagger.v3.oas.annotations.enums.SecuritySchemeIn;
+import io.swagger.v3.oas.annotations.enums.SecuritySchemeType;
+import io.swagger.v3.oas.annotations.security.SecurityScheme;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -39,6 +45,8 @@ import java.nio.file.Path;
  * codebase calls {@code new} on an infrastructure class.
  */
 @Configuration
+@SecurityScheme(name = "apiKey", type = SecuritySchemeType.HTTP, scheme = "bearer", in = SecuritySchemeIn.HEADER,
+        description = "Only when the deployment enables API keys (app.security.api-keys-enabled); otherwise ignored.")
 public class ApplicationAssembly {
 
     // ---- cross-cutting ports ----------------------------------------------
@@ -118,6 +126,16 @@ public class ApplicationAssembly {
                                       RetryImportUseCase retry, ImportProgressStreamer streamer, AppProperties props) {
         return new ImportController(create, get, cancel, summary, rejections, retry, streamer,
                 props.upload().providerHeader(), props.upload().defaultProvider());
+    }
+
+    /** Runs right after the request-id filter, so rejections carry a request id. */
+    @Bean
+    @ConditionalOnProperty(prefix = "app.security", name = "api-keys-enabled", havingValue = "true")
+    FilterRegistrationBean<ApiKeyAuthenticationFilter> apiKeyAuthenticationFilter(AppProperties props, ObjectMapper json) {
+        var filter = new ApiKeyAuthenticationFilter(ApiKeyAuthenticationFilter.parseKeys(props.security().apiKeys()), json);
+        FilterRegistrationBean<ApiKeyAuthenticationFilter> bean = new FilterRegistrationBean<>(filter);
+        bean.setOrder(Ordered.HIGHEST_PRECEDENCE + 10);
+        return bean;
     }
 
     @Bean
