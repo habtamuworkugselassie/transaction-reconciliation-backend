@@ -163,6 +163,11 @@ app:
   security:
     api-keys-enabled: ${API_KEYS_ENABLED:false}
     api-keys: ${API_KEYS:}
+  retention:
+    enabled: ${RETENTION_ENABLED:false}
+    uploaded-files-after: ${RETENTION_UPLOADED_FILES_AFTER:7d}
+    interval: ${RETENTION_INTERVAL:1h}
+    batch-size: ${RETENTION_BATCH_SIZE:100}
   events:
     max-connections: ${EVENTS_MAX_CONNECTIONS:100}
     poll-interval: ${EVENTS_POLL_INTERVAL:1s}

@@ -12,6 +12,7 @@ import org.jooq.impl.DSL;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -271,6 +272,34 @@ public class JooqImportRepository implements ImportRepository {
                 .returning()
                 .fetchOptional()
                 .map(JooqImportRepository::map);
+    }
+
+    // ---- retention -------------------------------------------------------------
+
+    private static final List<String> TERMINAL_STATUSES = List.of(ImportStatus.COMPLETED.wireName(),
+            ImportStatus.FAILED.wireName(), ImportStatus.CANCELLED.wireName());
+
+    @Override
+    public List<ImportJob> findPurgeable(Instant completedBefore, int limit) {
+        return db.selectFrom(IMPORTS)
+                .where(IMPORTS.STATUS.in(TERMINAL_STATUSES))
+                .and(IMPORTS.STORAGE_KEY.isNotNull())
+                .and(IMPORTS.FILE_PURGED_AT.isNull())
+                .and(IMPORTS.COMPLETED_AT.lt(odt(completedBefore)))
+                .orderBy(IMPORTS.COMPLETED_AT)
+                .limit(limit)
+                .fetch(JooqImportRepository::map);
+    }
+
+    @Override
+    public boolean markFilePurged(UUID id, Instant now) {
+        return db.update(IMPORTS)
+                .set(IMPORTS.FILE_PURGED_AT, odt(now))
+                .set(IMPORTS.UPDATED_AT, odt(now))
+                .where(IMPORTS.ID.eq(id))
+                .and(IMPORTS.STATUS.in(TERMINAL_STATUSES))
+                .and(IMPORTS.FILE_PURGED_AT.isNull())
+                .execute() == 1;
     }
 
     @Override

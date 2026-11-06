@@ -4,6 +4,7 @@ import com.reconciliation.domain.model.ImportJob;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -103,6 +104,18 @@ public interface ImportRepository {
      * fresh automatic-attempt budget. Returns the re-queued job, or empty if not applicable.
      */
     Optional<ImportJob> retryFailed(UUID id, int maxRetries, Instant now);
+
+    // ---- retention ---------------------------------------------------------
+
+    /** Terminal imports completed before {@code completedBefore} whose file is still stored, oldest first. */
+    List<ImportJob> findPurgeable(Instant completedBefore, int limit);
+
+    /**
+     * Records that the uploaded file is being deleted. Conditional on the import being
+     * terminal and not yet purged, which makes it mutually exclusive with
+     * {@link #retryFailed}: whichever commits first wins.
+     */
+    boolean markFilePurged(UUID id, Instant now);
 
     long recordAttemptStart(UUID id, int attempt, String workerId, Instant now);
 

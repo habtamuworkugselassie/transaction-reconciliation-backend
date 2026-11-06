@@ -260,6 +260,30 @@ public final class InMemoryImportRepository implements ImportRepository {
         return Optional.of(retried);
     }
 
+    @Override
+    public synchronized List<ImportJob> findPurgeable(Instant completedBefore, int limit) {
+        return rows.values().stream()
+                .filter(j -> j.status().isTerminal() && j.storageKey() != null && j.filePurgedAt() == null
+                        && j.completedAt() != null && j.completedAt().isBefore(completedBefore))
+                .sorted(java.util.Comparator.comparing(ImportJob::completedAt))
+                .limit(limit)
+                .toList();
+    }
+
+    @Override
+    public synchronized boolean markFilePurged(UUID id, Instant now) {
+        ImportJob j = rows.get(id);
+        if (j == null || !j.status().isTerminal() || j.filePurgedAt() != null) {
+            return false;
+        }
+        rows.put(id, new ImportJob(j.id(), j.idempotencyKey(), j.providerId(), j.status(), j.originalFilename(),
+                j.storageKey(), j.fileSizeBytes(), j.contentSha256(), j.progress(), j.lastLineCommitted(),
+                j.cancelRequested(), j.attemptCount(), j.leaseOwner(), j.leaseExpiresAt(), j.failureReason(),
+                j.failureMessage(), j.createdAt(), now, j.startedAt(), j.completedAt(), j.retryCount(),
+                j.attemptBase(), now));
+        return true;
+    }
+
     // ---- used by InMemoryBatchWriter ---------------------------------------
 
     synchronized ImportJob advance(UUID id, long lastLine, int accepted, int rejected, int duplicates, Instant now) {

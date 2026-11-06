@@ -29,6 +29,9 @@ public interface MetricsRecorder {
     /** A client re-queued a failed import (POST /v1/imports/{id}/retry). */
     default void importRetried() { }
 
+    /** The retention job deleted uploaded files. */
+    default void uploadFilesPurged(int count) { }
+
     /** No-op implementation for tests and for wiring before Micrometer is configured. */
     MetricsRecorder NOOP = new MetricsRecorder() {
         @Override public void importCreated(long bytes) { }

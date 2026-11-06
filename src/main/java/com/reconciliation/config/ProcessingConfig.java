@@ -10,6 +10,8 @@ import com.reconciliation.application.port.RetryPolicy;
 import com.reconciliation.application.port.RiskScorer;
 import com.reconciliation.application.port.TransientFailureClassifier;
 import com.reconciliation.application.usecase.ProcessImportUseCase;
+import com.reconciliation.application.usecase.PurgeExpiredUploadsUseCase;
+import com.reconciliation.infrastructure.worker.RetentionScheduler;
 import com.reconciliation.domain.processing.RiskScoreCalculator;
 import com.reconciliation.infrastructure.retry.ExponentialBackoffRetryPolicy;
 import com.reconciliation.infrastructure.retry.SqlStateFailureClassifier;
@@ -69,5 +71,15 @@ public class ProcessingConfig {
         return new ImportWorker(queue, imports, processImport, clock, p.maxConcurrentImports(), p.heartbeatInterval(),
                 p.staleUploadTimeout(), p.redispatchInterval(), props.kafka().redeliveryDelay(),
                 props.shutdown().gracePeriod());
+    }
+
+    /** Retention runs on workers only, and only when enabled (off by default). */
+    @Bean
+    @ConditionalOnProperty(prefix = "app", name = {"processing.enabled", "retention.enabled"}, havingValue = "true")
+    RetentionScheduler retentionScheduler(ImportRepository imports, FileStorage storage, MetricsRecorder metrics,
+                                          Clock clock, AppProperties props) {
+        var r = props.retention();
+        return new RetentionScheduler(new PurgeExpiredUploadsUseCase(imports, storage, metrics, clock,
+                r.uploadedFilesAfter(), r.batchSize()), r.interval());
     }
 }

@@ -23,6 +23,7 @@ public final class RecordingMetrics implements MetricsRecorder {
     @Override public void retryExhausted(String operation) { events.add("retryExhausted:" + operation); }
 
     @Override public void importRetried() { events.add("importRetried"); }
+    @Override public void uploadFilesPurged(int count) { events.add("uploadFilesPurged:" + count); }
 
     public long count(String prefix) {
         synchronized (events) {

@@ -28,6 +28,7 @@ public record AppProperties(
         @Valid @NotNull Kafka kafka,
         @Valid @NotNull Cache cache,
         @Valid @NotNull Security security,
+        @Valid @NotNull Retention retention,
         @Valid @NotNull Events events
 ) {
 
@@ -140,6 +141,16 @@ public record AppProperties(
              * configured, never the keys themselves.
              */
             @DefaultValue("") String apiKeys
+    ) {}
+
+    /** Deletion of uploaded files after an import has been terminal for a while (worker role). */
+    public record Retention(
+            @DefaultValue("false") boolean enabled,
+            /** How long a terminal import keeps its uploaded file. */
+            @NotNull @DefaultValue("7d") Duration uploadedFilesAfter,
+            @NotNull @DefaultValue("1h") Duration interval,
+            /** Imports purged per run; bounds the work and the transaction size of one run. */
+            @Min(1) @Max(10000) @DefaultValue("100") int batchSize
     ) {}
 
     /** Server-sent progress events (GET /v1/imports/{id}/events). */

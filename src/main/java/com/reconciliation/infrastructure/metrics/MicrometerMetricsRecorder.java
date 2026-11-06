@@ -87,4 +87,9 @@ public final class MicrometerMetricsRecorder implements MetricsRecorder {
     public void importRetried() {
         registry.counter("imports.retried").increment();
     }
+
+    @Override
+    public void uploadFilesPurged(int count) {
+        registry.counter("retention.files.purged").increment(count);
+    }
 }
