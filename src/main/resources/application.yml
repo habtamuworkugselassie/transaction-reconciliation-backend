@@ -120,6 +120,11 @@ springdoc:
     operations-sorter: alpha
 
 app:
+  tracing:
+    # One span per SQL statement under the batch write / request that issued it; statements
+    # outside any trace (job polling, gauges) are not observed. Statement text is rendered
+    # with ? placeholders, so no record contents reach a span.
+    jdbc-spans: ${TRACING_JDBC_SPANS:true}
   upload:
     max-file-size-bytes: ${UPLOAD_MAX_FILE_SIZE_BYTES:209715200}
     max-concurrent-uploads: ${UPLOAD_MAX_CONCURRENT:4}

@@ -177,6 +177,7 @@ validated structure is `AppProperties`. The ones that matter for capacity:
 | `RETENTION_ENABLED` / `RETENTION_UPLOADED_FILES_AFTER` / `RETENTION_INTERVAL` / `RETENTION_BATCH_SIZE` | false / 7d / 1h / 100 | delete uploaded files of terminal imports (worker role) |
 | `EVENTS_MAX_CONNECTIONS` / `EVENTS_POLL_INTERVAL` / `EVENTS_HEARTBEAT_INTERVAL` / `EVENTS_TIMEOUT` | 100 / 1s / 15s / 30m | progress streams per instance; over the limit: 429 |
 | `MANAGEMENT_OTLP_TRACING_ENDPOINT` / `TRACING_SAMPLING_PROBABILITY` | – / 1.0 | export spans over OTLP (unset: traced in-process only, ids in logs) |
+| `TRACING_JDBC_SPANS` | true | one span per SQL statement (`insert transactions`, `select transactions`, ...) under the batch write or request that issued it |
 
 **API keys.** Generate a key and configure only its hash:
 
@@ -242,7 +243,7 @@ Likely bottlenecks in order: the scoring pool (CPU), then the single writer per 
 - Authentication is opt-in API keys (off by default so the public deployment stays testable);
   JWT/OIDC would replace the key lookup in the same filter. There are no roles: a key is a
   provider.
-- Tracing covers HTTP, Kafka and batch writes; JDBC statements are not individual spans.
+- Tracing covers HTTP, Kafka, batch writes and, under them, each SQL statement.
 - Uploads are not resumable: an interrupted upload is retried in full with the same
   `Idempotency-Key`. Processing, by contrast, resumes from its checkpoint.
 - Kafka and Redis run single-node in the compose files; production replication is an
