@@ -11,8 +11,12 @@ import com.reconciliation.infrastructure.persistence.JooqImportRepository;
 import com.reconciliation.infrastructure.persistence.JooqRejectionRepository;
 import com.reconciliation.infrastructure.persistence.JooqSummaryRepository;
 import com.reconciliation.infrastructure.tracing.ObservedBatchWriter;
+import com.reconciliation.infrastructure.tracing.ObservedJooqExecuteListener;
 import io.micrometer.observation.ObservationRegistry;
 import org.jooq.DSLContext;
+import org.jooq.ExecuteListenerProvider;
+import org.jooq.impl.DefaultExecuteListenerProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -39,6 +43,17 @@ public class PersistenceConfig {
     @Bean
     RejectionRepository rejectionRepository(DSLContext db, ObjectMapper objectMapper) {
         return new JooqRejectionRepository(db, objectMapper);
+    }
+
+    /**
+     * One span per SQL statement, nested under the batch write (or request) that issued it.
+     * Spring Boot's jOOQ auto-configuration adds every {@link ExecuteListenerProvider} bean to
+     * the DSLContext. {@code app.tracing.jdbc-spans=false} turns it off.
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "app.tracing", name = "jdbc-spans", havingValue = "true", matchIfMissing = true)
+    ExecuteListenerProvider jdbcSpanExecuteListenerProvider(ObservationRegistry observations) {
+        return new DefaultExecuteListenerProvider(new ObservedJooqExecuteListener(observations));
     }
 
     /** Observed so each batch write is a span under the import's trace (no-op when tracing is not exported). */

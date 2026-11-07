@@ -480,12 +480,24 @@ when `MANAGEMENT_OTLP_TRACING_ENDPOINT` is set (`docker-compose.tracing.yml` add
 One upload produces one trace:
 - `http post /v1/imports` → `imports.requested send`;
 - W3C headers on the Kafka record → `imports.requested receive` in the worker;
-- one `import batch write` span per batch.
+- one `import batch write` span per batch;
+- under each, one span per SQL statement, named `<verb> <table>`: `select imports` (the
+  lease check), `insert transactions` (the bulk insert whose `RETURNING` identifies
+  duplicates), `select transactions` (fingerprint lookup to classify them), `insert
+  rejected_records`, `update imports` (counters and checkpoint).
 
 The batch writer runs on a thread the use case creates, so the trace is carried there by an
 injected `ThreadFactory` that captures the context (Micrometer context-propagation) on the
 claiming thread. The batch spans come from an `ObservedBatchWriter` decorator. Neither
 touches the use case's code.
+
+The statement spans come from a jOOQ `ExecuteListener` (`ObservedJooqExecuteListener`),
+registered through Spring Boot's jOOQ auto-configuration, so the persistence adapters are
+not touched either. Verb and table are low-cardinality tags on a `jdbc.query` timer; the
+statement text is a span attribute only, rendered with `?` placeholders so record contents
+never leave the process. A statement is observed only inside an existing observation, so
+the worker's job polling, the queue gauges and the retention sweep do not each start a
+trace of their own. `TRACING_JDBC_SPANS=false` turns the listener off.
 
 The import id and batch number are span attributes only, never metric tags. This was
 verified end to end in Jaeger: the batch-write spans are children of the consumer span,
